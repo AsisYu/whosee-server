@@ -19,7 +19,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -66,6 +65,9 @@ func WhoisQuery(c *gin.Context) {
 		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
 			log.Printf("WhoisQuery: 返回缓存数据，域名: %s", domainStr)
 			c.Header("X-Cache", "HIT")
+			// 添加缓存信息到响应
+			response["isCached"] = true
+			response["cacheTime"] = time.Now().Format("2006-01-02 15:04:05")
 			c.JSON(200, response)
 			return
 		}
@@ -150,6 +152,8 @@ func WhoisQuery(c *gin.Context) {
 		"status":       whoisResp.DomainStatus,
 		"nameServers":  whoisResp.NameServers,
 		"updatedDate":  whoisResp.UpdateDate,
+		"isCached":     false,
+		"cacheTime":    time.Now().Format("2006-01-02 15:04:05"),
 	}
 
 	// 缓存结果
