@@ -121,25 +121,25 @@ npm run dev
 
 ## 🚀 部署指南
 
-### 🐳 使用Docker部署
+### ~~🐳 使用Docker部署~~
 
-1. 构建Docker镜像
+~~1. 构建Docker镜像~~
 
 ```bash
-# 在服务端目录下
-docker build -t whosee-server .
+~~# 在服务端目录下~~
+~~docker build -t whosee-server .~~
 ```
 
-2. 运行容器
+~~2. 运行容器~~
 
 ```bash
-docker run -d -p 3900:3900 --name whosee-server \
-  -e WHOISFREAKS_API_KEY=your_api_key \
-  -e WHOISXML_API_KEY=your_api_key \
-  -e JWT_SECRET=your_jwt_secret \
-  -e API_KEY=your_api_key \
-  --restart unless-stopped \
-  whosee-server
+~~docker run -d -p 3900:3900 --name whosee-server \~~
+  ~~  -e WHOISFREAKS_API_KEY=your_api_key \~~
+  ~~  -e WHOISXML_API_KEY=your_api_key \~~
+  ~~  -e JWT_SECRET=your_jwt_secret \~~
+  ~~  -e API_KEY=your_api_key \~~
+  ~~  --restart unless-stopped \~~
+  ~~  whosee-server~~
 ```
 
 ### 📦 使用PM2部署（生产环境）
