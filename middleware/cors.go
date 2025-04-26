@@ -10,6 +10,7 @@ package middleware
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,10 +41,25 @@ func Cors() gin.HandlerFunc {
 		}
 
 		origin := c.Request.Header.Get("Origin")
+		
+		// 如果没有Origin头，可能是内部请求或健康检查，直接通过
+		if origin == "" {
+			// 这是内部请求或健康检查，不需要CORS头
+			if c.Request.URL.Path == "/api/health" {
+				// 健康检查路径，不记录日志以减少噪音
+			} else {
+				// 其他内部请求，记录但不显示为错误
+				log.Printf("内部请求或无Origin请求: %s %s", c.Request.Method, c.Request.URL.Path)
+			}
+			c.Next()
+			return
+		}
+		
 		// 允许的域名列表
 		allowedOrigins := map[string]bool{
 			"http://localhost:8080":           true, // Vue开发环境
 			"http://localhost:3000":           true, // 开发环境
+			"http://localhost:5173":           true, // SvelteKit开发环境
 			"https://domain-whois.vercel.app": true, // 生产环境
 			"https://whosee.me":               true, //域名
 		}
@@ -55,6 +71,8 @@ func Cors() gin.HandlerFunc {
 			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			c.Writer.Header().Set("Access-Control-Allow-Headers",
 				"Content-Type, Authorization, X-Requested-With, Accept")
+			// 添加允许的响应头
+			c.Writer.Header().Set("Access-Control-Expose-Headers", "X-Cache")
 			c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 
 			// 记录设置的 CORS 头

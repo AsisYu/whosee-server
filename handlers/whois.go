@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 )
 
 // WhoisResponse 结构体用于解析 API 响应
@@ -47,7 +48,7 @@ type WhoisResponse struct {
 // 添加限流器
 var rateLimiter = time.NewTicker(1 * time.Second) // 每秒最多一个请求
 
-func WhoisQuery(c *gin.Context) {
+func WhoisQuery(c *gin.Context, rdb *redis.Client) {
 	// 从上下文中获取域名
 	domain, exists := c.Get("domain")
 	if !exists {
@@ -164,5 +165,7 @@ func WhoisQuery(c *gin.Context) {
 	}
 
 	c.Header("X-Cache", "MISS")
+	// 添加缓存状态字段
+	response["isCached"] = false
 	c.JSON(200, response)
 }

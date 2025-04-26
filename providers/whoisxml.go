@@ -55,11 +55,20 @@ type WhoisXMLResponse struct {
 
 type WhoisXMLProvider struct {
 	apiKey string
+	client *http.Client
 }
 
 func NewWhoisXMLProvider() *WhoisXMLProvider {
 	return &WhoisXMLProvider{
 		apiKey: os.Getenv("WHOISXML_API_KEY"),
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        10,
+				MaxIdleConnsPerHost: 5,
+				IdleConnTimeout:     60 * time.Second,
+			},
+		},
 	}
 }
 
@@ -72,6 +81,8 @@ func (p *WhoisXMLProvider) Query(domain string) (*types.WhoisResponse, error, bo
 	response, err := p.queryAPI(domain)
 	if err != nil {
 		log.Printf("WhoisXML API 查询失败: %v", err)
+	} else {
+		log.Printf("WhoisXML API 查询成功: %s", domain)
 	}
 	return response, err, false
 }
@@ -83,7 +94,12 @@ func (p *WhoisXMLProvider) queryAPI(domain string) (*types.WhoisResponse, error)
 	}
 	
 	// 记录API密钥前几个字符，用于调试
-	log.Printf("使用WhoisXML API密钥(前10个字符): %s...", apiKey[:10])
+	keyLength := len(apiKey)
+	if keyLength > 10 {
+		log.Printf("使用WhoisXML API密钥(前10个字符): %s...", apiKey[:10])
+	} else {
+		log.Printf("使用WhoisXML API密钥(长度不足): %s...", apiKey)
+	}
 	
 	apiURL := fmt.Sprintf("https://www.whoisxmlapi.com/whoisserver/WhoisService?apiKey=%s&domainName=%s&outputFormat=JSON",
 		url.QueryEscape(apiKey),
@@ -92,118 +108,157 @@ func (p *WhoisXMLProvider) queryAPI(domain string) (*types.WhoisResponse, error)
 	// 添加请求日志，隐藏API密钥
 	log.Printf("请求WhoisXML: %s", strings.Replace(apiURL, apiKey, "[HIDDEN]", 1))
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request failed: %v", err)
-	}
-
-	req.Header.Set("User-Agent", "DomainWhoseek/1.0")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("API request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// 检查状态码
-	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
-		log.Printf("WhoisXML API 返回非200状态码: %d, 响应: %s", resp.StatusCode, string(body))
-		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	// 检查Content-Type
-	contentType := resp.Header.Get("Content-Type")
-	if !strings.Contains(contentType, "application/json") {
-		body, _ := ioutil.ReadAll(resp.Body)
-		log.Printf("WhoisXML API 返回非JSON格式: %s, 响应: %s", contentType, string(body))
-		return nil, fmt.Errorf("unexpected content type: %s", contentType)
-	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response failed: %v", err)
-	}
-
-	log.Printf("WhoisXML API 原始响应: %s", string(body))
-
-	var whoisResp WhoisXMLResponse
-	if err := json.Unmarshal(body, &whoisResp); err != nil {
-		return nil, fmt.Errorf("parse response failed: %v", err)
-	}
-
-	// 优先使用主状态，如果为空则使用注册数据中的状态
-	statusStr := whoisResp.WhoisRecord.Status
-	if statusStr == "" {
-		statusStr = whoisResp.WhoisRecord.RegistryData.Status
-	}
-	statuses := strings.Fields(statusStr)
-
-	// 优先使用主记录的日期，如果为空则使用注册数据中的日期
-	createdDate := whoisResp.WhoisRecord.CreatedDate
-	if createdDate == "" {
-		createdDate = whoisResp.WhoisRecord.RegistryData.CreatedDate
-	}
-
-	expiresDate := whoisResp.WhoisRecord.ExpiresDate
-	if expiresDate == "" {
-		expiresDate = whoisResp.WhoisRecord.RegistryData.ExpiresDate
-	}
-
-	updatedDate := whoisResp.WhoisRecord.UpdatedDate
-	if updatedDate == "" {
-		updatedDate = whoisResp.WhoisRecord.RegistryData.UpdatedDate
-	}
-
-	// 优先使用主记录的名称服务器，如果为空则使用注册数据中的
-	nameServers := whoisResp.WhoisRecord.NameServers.HostNames
-	if len(nameServers) == 0 {
-		nameServers = whoisResp.WhoisRecord.RegistryData.NameServers.HostNames
-	}
-
-	// 检查是否有错误响应
-	if whoisResp.WhoisRecord.DomainName == "" {
-		return nil, fmt.Errorf("domain not found or API error")
-	}
-
-	// 构建联系人信息
-	registrant := &types.Contact{
-		Name:         whoisResp.WhoisRecord.Registrant.Name,
-		Organization: whoisResp.WhoisRecord.Registrant.Organization,
-		Email:        whoisResp.WhoisRecord.Registrant.Email,
-		Phone:        whoisResp.WhoisRecord.Registrant.Phone,
-		Country:      whoisResp.WhoisRecord.Registrant.Country,
-		Province:     whoisResp.WhoisRecord.Registrant.State,
-		City:         whoisResp.WhoisRecord.Registrant.City,
-	}
-
-	// 如果主记录中没有注册人信息，使用注册数据中的
-	if registrant.Name == "" && registrant.Email == "" {
-		registrant = &types.Contact{
-			Name:  whoisResp.WhoisRecord.RegistryData.Registrant.Name,
-			Email: whoisResp.WhoisRecord.RegistryData.Registrant.Email,
+	// 实现重试逻辑
+	var (
+		resp *http.Response
+		body []byte
+	)
+	
+	maxRetries := 2
+	retryDelay := 2 * time.Second
+	
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			log.Printf("WhoisXML API 重试请求 #%d，域名: %s", attempt, domain)
+			time.Sleep(retryDelay)
+			retryDelay *= 2 // 指数退避
 		}
+		
+		req, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("创建请求失败: %v", err)
+		}
+		
+		req.Header.Set("User-Agent", "DomainWhoseek/1.0")
+		req.Header.Set("Accept", "application/json")
+		
+		resp, err = p.client.Do(req)
+		
+		if err != nil {
+			log.Printf("WhoisXML API 请求失败 (尝试 %d/%d): %v", attempt+1, maxRetries+1, err)
+			continue // 重试
+		}
+		
+		defer resp.Body.Close()
+		
+		// 检查状态码
+		if resp.StatusCode != http.StatusOK {
+			body, _ := ioutil.ReadAll(resp.Body)
+			log.Printf("WhoisXML API 返回非200状态码: %d, 响应: %s (尝试 %d/%d)", 
+				resp.StatusCode, string(body), attempt+1, maxRetries+1)
+			
+			// 如果状态码表示限流或服务器错误，则重试
+			if resp.StatusCode == 429 || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
+				log.Printf("WhoisXML API 返回状态码 %d，将重试", resp.StatusCode)
+				continue
+			}
+			
+			return nil, fmt.Errorf("API返回状态码 %d", resp.StatusCode)
+		}
+		
+		// 检查Content-Type
+		contentType := resp.Header.Get("Content-Type")
+		if !strings.Contains(contentType, "application/json") {
+			body, _ := ioutil.ReadAll(resp.Body)
+			log.Printf("WhoisXML API 返回非JSON格式: %s, 响应: %s (尝试 %d/%d)", 
+				contentType, string(body), attempt+1, maxRetries+1)
+			continue // 重试
+		}
+		
+		body, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("读取响应失败 (尝试 %d/%d): %v", attempt+1, maxRetries+1, err)
+			continue // 重试
+		}
+		
+		// 解析响应
+		var whoisResp WhoisXMLResponse
+		err = json.Unmarshal(body, &whoisResp)
+		if err != nil {
+			log.Printf("解析响应失败 (尝试 %d/%d): %v", attempt+1, maxRetries+1, err)
+			continue // 重试
+		}
+		
+		// 验证响应
+		if whoisResp.WhoisRecord.DomainName == "" {
+			log.Printf("响应验证失败：域名为空 (尝试 %d/%d)", attempt+1, maxRetries+1)
+			continue // 重试
+		}
+		
+		// 优先使用主状态，如果为空则使用注册数据中的状态
+		statusStr := whoisResp.WhoisRecord.Status
+		if statusStr == "" {
+			statusStr = whoisResp.WhoisRecord.RegistryData.Status
+		}
+		statuses := strings.Fields(statusStr)
+		
+		// 优先使用主记录的日期，如果为空则使用注册数据中的日期
+		createdDate := whoisResp.WhoisRecord.CreatedDate
+		if createdDate == "" {
+			createdDate = whoisResp.WhoisRecord.RegistryData.CreatedDate
+		}
+		
+		expiresDate := whoisResp.WhoisRecord.ExpiresDate
+		if expiresDate == "" {
+			expiresDate = whoisResp.WhoisRecord.RegistryData.ExpiresDate
+		}
+		
+		updatedDate := whoisResp.WhoisRecord.UpdatedDate
+		if updatedDate == "" {
+			updatedDate = whoisResp.WhoisRecord.RegistryData.UpdatedDate
+		}
+		
+		// 优先使用主记录的名称服务器，如果为空则使用注册数据中的名称服务器
+		nameServers := whoisResp.WhoisRecord.NameServers.HostNames
+		if len(nameServers) == 0 {
+			nameServers = whoisResp.WhoisRecord.RegistryData.NameServers.HostNames
+		}
+		
+		// 构建联系人信息
+		registrant := &types.Contact{
+			Name:         whoisResp.WhoisRecord.Registrant.Name,
+			Organization: whoisResp.WhoisRecord.Registrant.Organization,
+			Email:        whoisResp.WhoisRecord.Registrant.Email,
+			Phone:        whoisResp.WhoisRecord.Registrant.Phone,
+			Country:      whoisResp.WhoisRecord.Registrant.Country,
+			Province:     whoisResp.WhoisRecord.Registrant.State,
+			City:         whoisResp.WhoisRecord.Registrant.City,
+		}
+		
+		// 如果主记录中没有注册人信息，尝试使用注册数据中的信息
+		if registrant.Name == "" && registrant.Email == "" {
+			registrant.Name = whoisResp.WhoisRecord.RegistryData.Registrant.Name
+			registrant.Email = whoisResp.WhoisRecord.RegistryData.Registrant.Email
+		}
+		
+		// 成功处理响应
+		result := &types.WhoisResponse{
+			Available:    false, // WhoisXML API不直接提供域名可用性信息
+			Domain:       whoisResp.WhoisRecord.DomainName,
+			Registrar:    whoisResp.WhoisRecord.RegistrarName,
+			CreateDate:   createdDate,
+			ExpiryDate:   expiresDate,
+			Status:       statuses,
+			NameServers:  nameServers,
+			UpdateDate:   updatedDate,
+			Registrant:   registrant,
+			WhoisServer:  whoisResp.WhoisRecord.WhoisServer,
+			DomainAge:    whoisResp.WhoisRecord.EstimatedDomainAge,
+			ContactEmail: whoisResp.WhoisRecord.ContactEmail,
+		}
+		
+		// 记录查询结果
+		log.Printf("WhoisXML 查询结果 - 域名: %s, 注册商: %s, 创建日期: %s, 到期日期: %s, 状态: %v, 名称服务器: %v",
+			result.Domain, 
+			result.Registrar, 
+			result.CreateDate, 
+			result.ExpiryDate, 
+			result.Status, 
+			result.NameServers)
+		
+		return result, nil
 	}
-
-	whoisServer := whoisResp.WhoisRecord.WhoisServer
-	if whoisServer == "" {
-		whoisServer = whoisResp.WhoisRecord.RegistryData.WhoisServer
-	}
-
-	return &types.WhoisResponse{
-		Available:    len(statuses) == 0,
-		Domain:       whoisResp.WhoisRecord.DomainName,
-		Registrar:    whoisResp.WhoisRecord.RegistrarName,
-		CreateDate:   createdDate,
-		ExpiryDate:   expiresDate,
-		Status:       statuses,
-		NameServers:  nameServers,
-		UpdateDate:   updatedDate,
-		Registrant:   registrant,
-		WhoisServer:  whoisServer,
-		DomainAge:    whoisResp.WhoisRecord.EstimatedDomainAge,
-		ContactEmail: whoisResp.WhoisRecord.ContactEmail,
-	}, nil
+	
+	// 所有重试都失败
+	return nil, fmt.Errorf("WhoisXML API 请求失败，已重试 %d 次", maxRetries)
 }
