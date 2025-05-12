@@ -1,9 +1,6 @@
 /*
  * @Author: AsisYu 2773943729@qq.com
  * @Date: 2025-03-31 02:25:00
- * @LastEditors: AsisYu 2773943729@qq.com
- * @LastEditTime: 2025-03-31 02:25:00
- * @FilePath: \whosee-whois\服务端\handlers\dns.go
  * @Description: DNS查询处理器
  */
 package handlers
@@ -30,11 +27,11 @@ type DNSRecord struct {
 
 // DNSResponse 表示DNS查询响应
 type DNSResponse struct {
-	Domain   string      `json:"domain"`
-	Records  []DNSRecord `json:"records"`
-	QueryTime string     `json:"query_time"`
-	IsCached bool        `json:"is_cached"`
-	CacheTime string     `json:"cache_time"`
+	Domain    string      `json:"domain"`
+	Records   []DNSRecord `json:"records"`
+	QueryTime string      `json:"query_time"`
+	IsCached  bool        `json:"is_cached"`
+	CacheTime string      `json:"cache_time"`
 }
 
 // DNSQuery 处理DNS查询请求
@@ -50,7 +47,7 @@ func DNSQuery(c *gin.Context, rdb *redis.Client) {
 
 	domainStr := domain.(string)
 	log.Printf("DNSQuery: 开始查询域名: %s", domainStr)
-	
+
 	// 尝试从Redis获取缓存
 	cacheKey := fmt.Sprintf("dns:%s", domainStr)
 	log.Printf("DNSQuery: 尝试从Redis获取缓存，键: %s", cacheKey)

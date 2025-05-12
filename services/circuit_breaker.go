@@ -1,7 +1,7 @@
 /*
  * @Author: AsisYu 2773943729@qq.com
  * @Date: 2025-04-10 16:09:00
- * @Description: u7194u65adu5668u6a21u5f0fu5b9eu73b0
+ * @Description: 电路断路器模式实现
  */
 package services
 
@@ -11,16 +11,16 @@ import (
 	"time"
 )
 
-// CircuitState u7194u65adu5668u72b6u6001
+// CircuitState 电路断路器状态
 type CircuitState int
 
 const (
-	StateClosed CircuitState = iota // u5173u95edu72b6u6001 - u6b63u5e38u5de5u4f5c
-	StateOpen                       // u5f00u542fu72b6u6001 - u7194u65adu751fu6548
-	StateHalfOpen                   // u534au5f00u72b6u6001 - u5c1du8bd5u6062u590d
+	StateClosed CircuitState = iota // 关闭状态 - 正常工作
+	StateOpen                       // 开启状态 - 电路断开
+	StateHalfOpen                   // 半开启状态 - 允许一次请求
 )
 
-// CircuitBreaker u5b9eu73b0u7194u65adu5668u6a21u5f0f
+// CircuitBreaker 电路断路器模式实现
 type CircuitBreaker struct {
 	state            CircuitState
 	failureCount     int
@@ -31,7 +31,7 @@ type CircuitBreaker struct {
 	onStateChange    func(from, to CircuitState)
 }
 
-// NewCircuitBreaker u521bu5efau65b0u7684u7194u65adu5668
+// NewCircuitBreaker 创建电路断路器实例
 func NewCircuitBreaker(failureThreshold int, resetTimeout time.Duration) *CircuitBreaker {
 	return &CircuitBreaker{
 		state:            StateClosed,
@@ -40,29 +40,29 @@ func NewCircuitBreaker(failureThreshold int, resetTimeout time.Duration) *Circui
 	}
 }
 
-// OnStateChange u8bbeu7f6eu72b6u6001u53d8u5316u56deu8c03
+// OnStateChange 设置状态变化回调函数
 func (cb *CircuitBreaker) OnStateChange(f func(from, to CircuitState)) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 	cb.onStateChange = f
 }
 
-// Execute u6267u884cu53d7u7194u65adu5668u4fddu62a4u7684u64cdu4f5c
+// Execute 执行操作并检查电路断路器状态
 func (cb *CircuitBreaker) Execute(operation func() error) error {
-	// u68c0u67e5u7194u65adu5668u72b6u6001
+	// 检查电路断路器状态
 	if !cb.AllowRequest() {
 		return errors.New("circuit open")
 	}
 	
 	err := operation()
 	
-	// u66f4u65b0u7194u65adu5668u72b6u6001
+	// 更新电路断路器状态
 	cb.RecordResult(err == nil)
 	
 	return err
 }
 
-// AllowRequest u5224u65adu662fu5426u5141u8bb8u8bf7u6c42u901au8fc7
+// AllowRequest 检查是否允许请求
 func (cb *CircuitBreaker) AllowRequest() bool {
 	cb.mutex.RLock()
 	defer cb.mutex.RUnlock()
@@ -71,9 +71,9 @@ func (cb *CircuitBreaker) AllowRequest() bool {
 	case StateClosed:
 		return true
 	case StateOpen:
-		// u68c0u67e5u662fu5426u5230u8fbeu91cdu7f6eu65f6u95f4
+		// 检查是否到达重置超时时间
 		if time.Since(cb.lastFailureTime) > cb.resetTimeout {
-			// u72b6u6001u8f6cu6362u4e3au534au5f00
+			// 状态切换到半开启状态
 			cb.mutex.RUnlock()
 			cb.mutex.Lock()
 			if cb.state == StateOpen {
@@ -89,23 +89,23 @@ func (cb *CircuitBreaker) AllowRequest() bool {
 		}
 		return false
 	case StateHalfOpen:
-		// u534au5f00u72b6u6001u53eau5141u8bb8u4e00u4e2au8bf7u6c42u901au8fc7
+		// 半开启状态允许一次请求
 		return true
 	default:
 		return true
 	}
 }
 
-// RecordResult u8bb0u5f55u8bf7u6c42u7ed3u679c
+// RecordResult 记录请求结果
 func (cb *CircuitBreaker) RecordResult(success bool) {
 	cb.mutex.Lock()
 	defer cb.mutex.Unlock()
 	
 	if success {
-		// u6210u529fu60c5u51b5
+		// 成功请求
 		switch cb.state {
 		case StateHalfOpen:
-			// u534au5f00u72b6u6001u6210u529fu5219u6062u590du5230u5173u95edu72b6u6001
+			// 半开启状态成功请求后切换到关闭状态
 			prevState := cb.state
 			cb.state = StateClosed
 			cb.failureCount = 0
@@ -113,18 +113,18 @@ func (cb *CircuitBreaker) RecordResult(success bool) {
 				cb.onStateChange(prevState, cb.state)
 			}
 		case StateClosed:
-			// u5173u95edu72b6u6001u6210u529fu5219u91cdu7f6eu5931u8d25u8ba1u6570
+			// 关闭状态成功请求后重置失败计数
 			cb.failureCount = 0
 		}
 	} else {
-		// u5931u8d25u60c5u51b5
+		// 失败请求
 		cb.lastFailureTime = time.Now()
 		
 		switch cb.state {
 		case StateClosed:
-			// u5173u95edu72b6u6001u4e0bu589eu52a0u5931u8d25u8ba1u6570
+			// 关闭状态失败请求后增加失败计数
 			cb.failureCount++
-			// u8fbeu5230u9608u503cu5219u8f6cu4e3au5f00u542fu72b6u6001
+			// 达到失败阈值后切换到开启状态
 			if cb.failureCount >= cb.failureThreshold {
 				prevState := cb.state
 				cb.state = StateOpen
@@ -133,7 +133,7 @@ func (cb *CircuitBreaker) RecordResult(success bool) {
 				}
 			}
 		case StateHalfOpen:
-			// u534au5f00u72b6u6001u4e0bu5931u8d25u7acbu5373u8f6cu4e3au5f00u542fu72b6u6001
+			// 半开启状态失败请求后切换到开启状态
 			prevState := cb.state
 			cb.state = StateOpen
 			if cb.onStateChange != nil {

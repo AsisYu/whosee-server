@@ -1,3 +1,8 @@
+/*
+ * @Author: AsisYu 2773943729@qq.com
+ * @Date: 2025-04-09 12:15:00
+ * @Description: DNS检查服务
+ */
 package services
 
 import (
@@ -19,8 +24,8 @@ type DNSChecker struct {
 func NewDNSChecker() *DNSChecker {
 	return &DNSChecker{
 		servers: []string{
-			"8.8.8.8:53",    // Google DNS
-			"1.1.1.1:53",    // Cloudflare DNS
+			"8.8.8.8:53",         // Google DNS
+			"1.1.1.1:53",         // Cloudflare DNS
 			"114.114.114.114:53", // 国内DNS
 		},
 		testDomains: []string{
@@ -39,12 +44,12 @@ func (dc *DNSChecker) GetLastCheckTime() time.Time {
 // TestDNSHealth 测试DNS服务的健康状态
 func (dc *DNSChecker) TestDNSHealth() map[string]interface{} {
 	results := make(map[string]interface{})
-	
+
 	log.Println("开始测试DNS服务健康状态...")
-	
+
 	totalServers := len(dc.servers)
 	availableServers := 0
-	
+
 	for _, server := range dc.servers {
 		serverResult := map[string]interface{}{
 			"available":      false,
@@ -52,10 +57,10 @@ func (dc *DNSChecker) TestDNSHealth() map[string]interface{} {
 			"testSuccessful": false,
 			"testResults":    make([]map[string]interface{}, 0),
 		}
-		
+
 		// 为每个服务器测试一个随机域名
 		testDomain := dc.testDomains[time.Now().Nanosecond()%len(dc.testDomains)]
-		
+
 		// 创建自定义解析器
 		r := &net.Resolver{
 			PreferGo: true,
@@ -66,7 +71,7 @@ func (dc *DNSChecker) TestDNSHealth() map[string]interface{} {
 				return d.DialContext(ctx, "udp", server)
 			},
 		}
-		
+
 		startTime := time.Now()
 		testResult := map[string]interface{}{
 			"domain":       testDomain,
@@ -75,17 +80,17 @@ func (dc *DNSChecker) TestDNSHealth() map[string]interface{} {
 			"message":      "",
 			"responseTime": 0,
 		}
-		
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		
+
 		// 尝试查询域名的IP
 		ips, err := r.LookupHost(ctx, testDomain)
-		
+
 		responseTime := time.Since(startTime)
 		testResult["responseTime"] = responseTime.Milliseconds()
 		serverResult["responseTime"] = responseTime.Milliseconds()
-		
+
 		if err != nil {
 			testResult["message"] = fmt.Sprintf("DNS查询失败: %v", err)
 		} else if len(ips) == 0 {
@@ -94,17 +99,17 @@ func (dc *DNSChecker) TestDNSHealth() map[string]interface{} {
 			testResult["success"] = true
 			testResult["message"] = fmt.Sprintf("DNS查询成功，返回%d个IP地址", len(ips))
 			testResult["ips"] = ips[:min(5, len(ips))] // 最多显示5个IP
-			
+
 			serverResult["available"] = true
 			serverResult["testSuccessful"] = true
 			availableServers++
 		}
-		
+
 		// 添加测试结果
 		serverResults := serverResult["testResults"].([]map[string]interface{})
 		serverResults = append(serverResults, testResult)
 		serverResult["testResults"] = serverResults
-		
+
 		// 服务器名称格式化
 		serverName := server
 		switch server {
@@ -115,25 +120,25 @@ func (dc *DNSChecker) TestDNSHealth() map[string]interface{} {
 		case "114.114.114.114:53":
 			serverName = "中国DNS"
 		}
-		
+
 		results[serverName] = serverResult
 	}
-	
+
 	// 更新最后检查时间
 	dc.lastCheckTime = time.Now()
-	
+
 	log.Printf("DNS服务检查完成: 共%d个服务器, %d个可用", totalServers, availableServers)
-	
+
 	return results
 }
 
 // GetDNSStatus 获取DNS服务的状态
 func (dc *DNSChecker) GetDNSStatus() string {
 	results := dc.TestDNSHealth()
-	
+
 	totalServers := len(results)
 	availableServers := 0
-	
+
 	for _, result := range results {
 		if resultMap, ok := result.(map[string]interface{}); ok {
 			if available, ok := resultMap["available"].(bool); ok && available {
@@ -141,7 +146,7 @@ func (dc *DNSChecker) GetDNSStatus() string {
 			}
 		}
 	}
-	
+
 	if totalServers == 0 {
 		return "unknown"
 	} else if availableServers == 0 {
@@ -156,13 +161,13 @@ func (dc *DNSChecker) GetDNSStatus() string {
 func (dc *DNSChecker) CheckAllServers() []interface{} {
 	testResults := dc.TestDNSHealth()
 	servers := make([]interface{}, 0, len(testResults))
-	
+
 	// 将map转换为数组
 	for serverName, result := range testResults {
 		if resultMap, ok := result.(map[string]interface{}); ok {
 			// 设置服务器名称
 			resultMap["name"] = serverName
-			
+
 			// 设置状态
 			if available, ok := resultMap["available"].(bool); ok {
 				if available {
@@ -173,11 +178,11 @@ func (dc *DNSChecker) CheckAllServers() []interface{} {
 			} else {
 				resultMap["status"] = "unknown"
 			}
-			
+
 			servers = append(servers, resultMap)
 		}
 	}
-	
+
 	log.Printf("DNS检查完成，共检查了%d个服务器", len(servers))
 	return servers
 }

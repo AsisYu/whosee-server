@@ -1,16 +1,15 @@
 /*
  * @Author: AsisYu 2773943729@qq.com
- * @Date: 2025-01-17 23:34:52
- * @LastEditors: AsisYu 2773943729@qq.com
- * @LastEditTime: 2025-01-17 23:37:08
- * @FilePath: \dmainwhoseek\server\middleware\ratelimit.go
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ * @Date: 2025-03-31 04:10:00
+ * @Description: 限流中间件
  */
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// IPRateLimiter 内存中的IP限流器
 type IPRateLimiter struct {
 	ips map[string]*rate.Limiter
 	mu  *sync.RWMutex
@@ -27,6 +27,38 @@ type IPRateLimiter struct {
 	b   int
 }
 
+// RateLimitConfig 限流器配置
+type RateLimitConfig struct {
+	RedisClient     *redis.Client // Redis客户端，用于分布式限流
+	Key             string        // 限流器键
+	Rate            int           // 允许的请求速率
+	Period          time.Duration // 限流周期
+	Burst           int           // 突发请求允许的数量
+	IPLookup        []string      // IP查找方法
+	ExcludeIPs      []string      // 排除的IP列表
+	CacheExpiration time.Duration // 缓存过期时间
+	StatusCode      int           // 超限状态码
+	Message         string        // 超限消息
+	UseMemory       bool          // 是否使用内存限流
+}
+
+// DefaultRateLimitConfig 默认限流器配置
+func DefaultRateLimitConfig() RateLimitConfig {
+	return RateLimitConfig{
+		Key:             "limit:global",
+		Rate:            60,
+		Period:          time.Minute,
+		Burst:           10,
+		IPLookup:        []string{"X-Forwarded-For", "X-Real-IP", "RemoteAddr"},
+		ExcludeIPs:      []string{"127.0.0.1", "::1"},
+		CacheExpiration: 3 * time.Minute,
+		StatusCode:      429,
+		Message:         "请求过于频繁，请稍后再试",
+		UseMemory:       false,
+	}
+}
+
+// NewIPRateLimiter 创建一个新的IP限流器
 func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
 	return &IPRateLimiter{
 		ips: make(map[string]*rate.Limiter),
@@ -36,7 +68,7 @@ func NewIPRateLimiter(r rate.Limit, b int) *IPRateLimiter {
 	}
 }
 
-// 获取特定 IP 的限流器
+// getLimiter 获取特定IP的限流器
 func (i *IPRateLimiter) getLimiter(ip string) *rate.Limiter {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -55,141 +87,156 @@ func (i *IPRateLimiter) Allow(ip string) bool {
 	return i.getLimiter(ip).Allow()
 }
 
-func RateLimit(rdb *redis.Client) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		key := fmt.Sprintf("rate:ip:%s", c.ClientIP())
-		count, _ := rdb.Incr(c, key).Result()
-		// 使用管道优化Redis操作
-		pipe := rdb.Pipeline()
-		pipe.Expire(c, key, time.Minute)
-		// 添加IP黑名单检查
-		if count > 100 { // 1分钟内超过100次
-			pipe.Set(c, fmt.Sprintf("blacklist:%s", c.ClientIP()), true, time.Hour)
+// getClientIP 获取客户端IP
+func getClientIP(c *gin.Context, methods []string) string {
+	for _, method := range methods {
+		switch method {
+		case "X-Forwarded-For":
+			forwardedIPs := c.GetHeader("X-Forwarded-For")
+			if forwardedIPs != "" {
+				// 获取第一个IP
+				ip := strings.Split(forwardedIPs, ",")[0]
+				return strings.TrimSpace(ip)
+			}
+		case "X-Real-IP":
+			ip := c.GetHeader("X-Real-IP")
+			if ip != "" {
+				return ip
+			}
+		case "RemoteAddr":
+			ip, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+			if err == nil {
+				return ip
+			}
 		}
-		pipe.Exec(c)
+	}
 
-		if count > 60 { // 每分钟60次请求限制
-			c.AbortWithStatusJSON(429, gin.H{"error": "请求过于频繁"})
+	// 默认使用gin的ClientIP
+	return c.ClientIP()
+}
+
+// isExcludedIP 检查IP是否在排除列表中
+func isExcludedIP(ip string, excludeIPs []string) bool {
+	for _, excludeIP := range excludeIPs {
+		if ip == excludeIP {
+			return true
+		}
+
+		// 检查CIDR
+		if strings.Contains(excludeIP, "/") {
+			_, ipNet, err := net.ParseCIDR(excludeIP)
+			if err == nil {
+				parsedIP := net.ParseIP(ip)
+				if parsedIP != nil && ipNet.Contains(parsedIP) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// RateLimit 限流中间件
+func RateLimit() gin.HandlerFunc {
+	return RateLimitWithConfig(DefaultRateLimitConfig())
+}
+
+// RateLimitWithConfig 限流中间件（可配置）
+func RateLimitWithConfig(config RateLimitConfig) gin.HandlerFunc {
+	// 如果使用内存限流，创建一个内存限流器
+	var ipLimiter *IPRateLimiter
+	if config.UseMemory {
+		ipLimiter = NewIPRateLimiter(rate.Limit(float64(config.Rate)/config.Period.Seconds()), config.Burst)
+	}
+
+	return func(c *gin.Context) {
+		// 获取客户端IP
+		ip := getClientIP(c, config.IPLookup)
+
+		// 检查是否排除该IP
+		if isExcludedIP(ip, config.ExcludeIPs) {
+			c.Next()
 			return
 		}
+
+		// 构造限流器标识符
+		identifier := fmt.Sprintf("%s:%s:%s", config.Key, ip, c.Request.URL.Path)
+
+		// 检查是否允许请求
+		allowed := false
+
+		if config.UseMemory {
+			// 使用内存限流器
+			allowed = ipLimiter.Allow(identifier)
+		} else if config.RedisClient != nil {
+			// 使用Redis限流
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+
+			// 使用滑动窗口算法
+			periodSeconds := int(config.Period.Seconds())
+			currentTime := time.Now().Unix()
+			windowKey := fmt.Sprintf("%s:%d", identifier, currentTime/int64(periodSeconds))
+
+			// 获取当前窗口的请求次数
+			exists, err := config.RedisClient.Exists(ctx, windowKey).Result()
+			if err != nil {
+				// Redis错误，允许请求
+				log.Printf("[限流] Redis错误，允许请求: %s", err)
+				allowed = true
+			} else {
+				if exists == 0 {
+					// 新窗口，设置请求次数为1
+					_, err = config.RedisClient.SetEX(ctx, windowKey, 1, config.CacheExpiration).Result()
+					allowed = true
+				} else {
+					// 获取当前窗口的请求次数
+					count, err := config.RedisClient.Incr(ctx, windowKey).Result()
+					if err != nil {
+						log.Printf("[限流] Redis错误，允许请求: %s", err)
+						allowed = true
+					} else {
+						// 检查是否允许请求
+						if count <= int64(config.Rate)+int64(config.Burst) {
+							allowed = true
+						}
+					}
+				}
+			}
+		} else {
+			// 没有配置限流器，允许所有请求
+			allowed = true
+		}
+
+		// 处理限流结果
+		if !allowed {
+			// 设置限流相关头部
+			c.Header("X-RateLimit-Limit", fmt.Sprintf("%d", config.Rate))
+			c.Header("X-RateLimit-Remaining", "0")
+			c.Header("X-RateLimit-Reset", fmt.Sprintf("%d", time.Now().Add(config.Period).Unix()))
+			c.Header("Retry-After", fmt.Sprintf("%d", int(config.Period.Seconds())))
+
+			// 返回429状态码
+			c.JSON(config.StatusCode, gin.H{
+				"error":   "TOO_MANY_REQUESTS",
+				"message": config.Message,
+			})
+			c.Abort()
+			return
+		}
+
 		c.Next()
 	}
 }
 
-// 健康检查API的专用限流中间件
-func HealthCheckRateLimit(rdb *redis.Client) gin.HandlerFunc {
-	// 创建内存中的限流器，针对详细健康检查
-	detailedHealthLimiter := NewIPRateLimiter(rate.Limit(1.0/60.0), 1) // 每IP每分钟1次
-	
-	// 允许的前端域名列表，与CORS中间件保持一致
-	allowedOrigins := map[string]bool{
-		"http://localhost:8080":           true, // Vue开发环境
-		"http://localhost:3000":           true, // 开发环境
-		"http://localhost:5173":           true, // SvelteKit开发环境
-		"https://domain-whois.vercel.app": true, // 生产环境
-		"https://whosee.me":               true, // 域名
-	}
-	
-	// 最后一次详细健康检查的缓存（全局共享）
-	var (
-		lastDetailedCheck      map[string]interface{}
-		lastDetailedCheckTime  time.Time
-		lastDetailedCheckMutex sync.RWMutex
-	)
-	
-	return func(c *gin.Context) {
-		if !strings.HasPrefix(c.Request.URL.Path, "/api/health") {
-			c.Next()
-			return
-		}
-		
-		// 检查是否为详细健康检查请求
-		isDetailedCheck := c.Query("detailed") == "true"
-		clientIP := c.ClientIP()
-		
-		// 基本健康检查的限流（不那么严格）
-		if !isDetailedCheck {
-			key := fmt.Sprintf("rate:health:%s", clientIP)
-			count, _ := rdb.Incr(c, key).Result()
-			rdb.Expire(c, key, time.Minute)
-			
-			if count > 10 { // 每分钟限制10次基本健康检查
-				c.AbortWithStatusJSON(429, gin.H{"error": "健康检查请求过于频繁"})
-				return
-			}
-			c.Next()
-			return
-		}
-		
-		// 详细健康检查的安全措施
-		
-		// 1. 验证请求来源（仅允许前端应用访问）
-		origin := c.Request.Header.Get("Origin")
-		
-		// 检查是否来自允许的前端域名
-		isAllowedOrigin := allowedOrigins[origin]
-		
-		// 特殊情况：来自localhost的直接API调用或内部请求
-		isLocalRequest := clientIP == "127.0.0.1" || clientIP == "::1"
-		
-		// 开发环境：直接允许本地请求访问详细健康检查
-		if isLocalRequest {
-			log.Printf("本地开发环境请求 (IP: %s) - 允许访问详细健康检查", clientIP)
-			c.Next()
-			return
-		}
-		
-		if !isAllowedOrigin && !isLocalRequest {
-			log.Printf("来自未授权来源的详细健康检查尝试 (Origin: %s, IP: %s)", origin, clientIP)
-			c.AbortWithStatusJSON(403, gin.H{"error": "只有授权的前端应用可以执行详细健康检查"})
-			return
-		}
-		
-		// 2. 验证API密钥（仅针对非前端请求，例如直接API调用）
-		if !isAllowedOrigin && !isLocalRequest {
-			apiKey := c.GetHeader("X-API-Key")
-			expectedAPIKey := "your-health-check-api-key" // 从环境变量或配置获取
-			
-			if expectedAPIKey != "" && apiKey != expectedAPIKey {
-				log.Printf("来自IP %s 的未授权详细健康检查尝试（缺少有效的API密钥）", clientIP)
-				c.AbortWithStatusJSON(401, gin.H{"error": "没有权限执行详细健康检查"})
-				return
-			}
-		}
-		
-		// 3. 强力限流：使用内存限流器，每IP每分钟一次
-		if !detailedHealthLimiter.Allow(clientIP) {
-			log.Printf("来自IP %s 的详细健康检查请求因频率限制被拒绝", clientIP)
-			c.AbortWithStatusJSON(429, gin.H{"error": "详细健康检查请求过于频繁，请至少等待1分钟"})
-			return
-		}
-		
-		// 4. 结果缓存：检查是否有足够新的缓存可用
-		lastDetailedCheckMutex.RLock()
-		cacheAge := time.Since(lastDetailedCheckTime)
-		hasValidCache := !lastDetailedCheckTime.IsZero() && cacheAge < 5*time.Minute && lastDetailedCheck != nil
-		cachedResult := lastDetailedCheck
-		lastDetailedCheckMutex.RUnlock()
-		
-		if hasValidCache {
-			// 返回缓存的结果，避免重复执行详细检查
-			log.Printf("为请求 (Origin: %s, IP: %s) 返回缓存的详细健康检查结果（缓存时间: %v）", origin, clientIP, cacheAge)
-			c.Set("useHealthCheckCache", true)
-			c.Set("cachedHealthCheckResult", cachedResult)
-		} else {
-			// 标记此请求需要执行新的详细健康检查
-			c.Set("needNewHealthCheck", true)
-			
-			// 创建一个钩子来保存新的健康检查结果到缓存
-			c.Set("saveHealthCheckCache", func(result map[string]interface{}) {
-				lastDetailedCheckMutex.Lock()
-				defer lastDetailedCheckMutex.Unlock()
-				lastDetailedCheck = result
-				lastDetailedCheckTime = time.Now()
-				log.Printf("已更新详细健康检查缓存，由请求 (Origin: %s, IP: %s) 触发", origin, clientIP)
-			})
-		}
-		
-		c.Next()
-	}
+// HealthCheckRateLimit 健康检查限流中间件
+func HealthCheckRateLimit() gin.HandlerFunc {
+	// 配置限流器
+	config := DefaultRateLimitConfig()
+	config.Key = "limit:health"
+	config.Rate = 300 // 每分钟300次
+	config.Message = "健康检查请求过于频繁"
+	config.UseMemory = true // 使用内存限流
+
+	return RateLimitWithConfig(config)
 }

@@ -1,10 +1,7 @@
 /*
  * @Author: AsisYu 2773943729@qq.com
  * @Date: 2025-01-18 00:57:29
- * @LastEditors: AsisYu 2773943729@qq.com
- * @LastEditTime: 2025-01-18 01:33:11
- * @FilePath: \dmainwhoseek\server\handlers\whois.go
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ * @Description: Whois查询处理程序
  */
 package handlers
 
@@ -19,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 )

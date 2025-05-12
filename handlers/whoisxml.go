@@ -1,3 +1,9 @@
+/*
+ * @Author: AsisYu 2773943729@qq.com
+ * @Date: 2025-03-31 04:10:00
+ * @Description: WhoisXML API 查询处理程序
+ */
+
 package handlers
 
 import (
@@ -14,7 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// WhoisXMLResponse represents the WhoisXML API response structure
+// WhoisXML Response 表示 WhoisXML API 响应结构
 type WhoisXMLResponse struct {
 	WhoisRecord struct {
 		DomainName   string   `json:"domainName"`

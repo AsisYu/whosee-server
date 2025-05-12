@@ -10,14 +10,14 @@ import (
 	"sync"
 )
 
-// WorkerPool represents a pool of workers
+// WorkerPool 工作池结构体
 type WorkerPool struct {
 	tasks   chan func()
 	wg      sync.WaitGroup
 	workers int
 }
 
-// NewWorkerPool creates a new worker pool with specified number of workers
+// NewWorkerPool 创建一个指定工作者数量的工作池
 func NewWorkerPool(workers int) *WorkerPool {
 	return &WorkerPool{
 		tasks:   make(chan func(), workers*2), // 缓冲大小为工作者数量的两倍
@@ -25,7 +25,7 @@ func NewWorkerPool(workers int) *WorkerPool {
 	}
 }
 
-// Start starts the worker pool
+// Start 启动工作池
 func (p *WorkerPool) Start() {
 	for i := 0; i < p.workers; i++ {
 		p.wg.Add(1)
@@ -38,7 +38,7 @@ func (p *WorkerPool) Start() {
 	}
 }
 
-// Submit submits a task to the worker pool
+// Submit 提交任务到工作池
 func (p *WorkerPool) Submit(task func()) bool {
 	select {
 	case p.tasks <- task:
@@ -48,7 +48,7 @@ func (p *WorkerPool) Submit(task func()) bool {
 	}
 }
 
-// SubmitWithContext submits a task with context
+// SubmitWithContext 提交带有上下文的任务
 func (p *WorkerPool) SubmitWithContext(ctx context.Context, task func()) bool {
 	select {
 	case p.tasks <- task:
@@ -60,7 +60,7 @@ func (p *WorkerPool) SubmitWithContext(ctx context.Context, task func()) bool {
 	}
 }
 
-// Stop stops the worker pool
+// Stop 停止工作池
 func (p *WorkerPool) Stop() {
 	close(p.tasks)
 	p.wg.Wait()

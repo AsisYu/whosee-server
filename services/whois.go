@@ -1,3 +1,8 @@
+/*
+ * @Author: AsisYu 2773943729@qq.com
+ * @Date: 2025-04-29 12:15:00
+ * @Description: WHOIS查询服务
+ */
 package services
 
 import (

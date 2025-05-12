@@ -1,9 +1,6 @@
 /*
  * @Author: AsisYu 2773943729@qq.com
  * @Date: 2025-03-31 04:10:00
- * @LastEditors: AsisYu 2773943729@qq.com
- * @LastEditTime: 2025-03-31 04:10:00
- * @FilePath: \dmainwhoseek\server\handlers\screenshot.go
  * @Description: 域名截图处理程序
  */
 package handlers
@@ -20,10 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
-	"github.com/chromedp/chromedp"
-	
+
 	"dmainwhoseek/services"
 )
 
@@ -48,6 +45,9 @@ const screenshotCacheDuration = 24 * time.Hour
 
 // 截图存储目录
 const screenshotDir = "./static/screenshots"
+
+// ITDog测速截图存储目录
+const itdogScreenshotDir = "./static/itdog"
 
 // 截图 处理域名截图请求
 func Screenshot(c *gin.Context, rdb *redis.Client) {
@@ -157,7 +157,7 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 
 	if err != nil {
 		log.Printf("截图失败: %v", err)
-		
+
 		// 检查是否是服务熔断器开启的错误
 		if err.Error() == "circuit open" {
 			c.JSON(http.StatusServiceUnavailable, ScreenshotResponse{
@@ -167,13 +167,13 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 检查是否是网站无法访问的错误
-		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") || 
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
-		   strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") {
+		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
+			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") {
 			// 返回特定的错误信息，指示网站无法访问
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -182,7 +182,7 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 其他类型的错误
 		c.JSON(http.StatusOK, ScreenshotResponse{
 			Success: false,
@@ -260,13 +260,13 @@ func ScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 
 	if err != nil {
 		log.Printf("截图失败: %v", err)
-		
+
 		// 检查是否是网站无法访问的错误
-		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") || 
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
-		   strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") {
+		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
+			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") {
 			// 返回特定的错误信息，指示网站无法访问
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -275,7 +275,7 @@ func ScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 其他类型的错误
 		c.JSON(http.StatusOK, ScreenshotResponse{
 			Success: false,
@@ -386,13 +386,13 @@ func ElementScreenshot(c *gin.Context, rdb *redis.Client) {
 
 	if err != nil {
 		log.Printf("元素截图失败: %v", err)
-		
+
 		// 检查是否是网站无法访问的错误
-		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") || 
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
-		   strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") {
+		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
+			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") {
 			// 返回特定的错误信息，指示网站无法访问
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -401,11 +401,11 @@ func ElementScreenshot(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 检查是否是元素未找到的错误
-		if strings.Contains(err.Error(), "waiting for selector") || 
-		   strings.Contains(err.Error(), "not found") ||
-		   strings.Contains(err.Error(), "not visible") {
+		if strings.Contains(err.Error(), "waiting for selector") ||
+			strings.Contains(err.Error(), "not found") ||
+			strings.Contains(err.Error(), "not visible") {
 			// 返回特定的错误信息，指示元素未找到
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -414,7 +414,7 @@ func ElementScreenshot(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 其他类型的错误
 		c.JSON(http.StatusOK, ScreenshotResponse{
 			Success: false,
@@ -511,13 +511,13 @@ func ElementScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 
 	if err != nil {
 		log.Printf("元素截图失败: %v", err)
-		
+
 		// 检查是否是网站无法访问的错误
-		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") || 
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
-		   strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") {
+		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
+			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") {
 			// 返回特定的错误信息，指示网站无法访问
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -526,11 +526,11 @@ func ElementScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 检查是否是元素未找到的错误
-		if strings.Contains(err.Error(), "waiting for selector") || 
-		   strings.Contains(err.Error(), "not found") ||
-		   strings.Contains(err.Error(), "not visible") {
+		if strings.Contains(err.Error(), "waiting for selector") ||
+			strings.Contains(err.Error(), "not found") ||
+			strings.Contains(err.Error(), "not visible") {
 			// 返回特定的错误信息，指示元素未找到
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -539,7 +539,7 @@ func ElementScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 其他类型的错误
 		c.JSON(http.StatusOK, ScreenshotResponse{
 			Success: false,
@@ -619,8 +619,8 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 确保截图目录存在
-	if err := os.MkdirAll(screenshotDir, 0755); err != nil {
-		log.Printf("创建截图目录失败: %v", err)
+	if err := os.MkdirAll(itdogScreenshotDir, 0755); err != nil {
+		log.Printf("创建ITDog截图目录失败: %v", err)
 		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
 			Success: false,
 			Error:   "服务器内部错误",
@@ -630,8 +630,8 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 
 	// 生成文件名
 	fileName := fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix())
-	filePath := filepath.Join(screenshotDir, fileName)
-	fileURL := fmt.Sprintf("/static/screenshots/%s", fileName)
+	filePath := filepath.Join(itdogScreenshotDir, fileName)
+	fileURL := fmt.Sprintf("/static/itdog/%s", fileName)
 
 	// 使用chromedp获取截图
 	log.Printf("开始获取itdog测速截图: %s", domain)
@@ -656,16 +656,16 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 		err := chromedp.Run(ctx,
 			// 导航到itdog测速页面
 			chromedp.Navigate(fmt.Sprintf("https://www.itdog.cn/ping/%s", domain)),
-			
+
 			// 等待"单次测试"按钮出现
 			chromedp.WaitVisible(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery),
-			
+
 			// 点击"单次测试"按钮
 			chromedp.Click(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery),
-			
+
 			// 等待测试完成 - 通过检查进度条
 			chromedp.Sleep(2*time.Second), // 先等待2秒让测试开始
-			
+
 			// 使用循环检查进度条，最多等待45秒
 			func() chromedp.Action {
 				return chromedp.ActionFunc(func(ctx context.Context) error {
@@ -685,15 +685,15 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 							// 确保进度值有效且达到总数
 							return total > 0 && current === total;
 						})()`, &isDone).Do(ctx)
-						
+
 						if err != nil {
 							return err
 						}
-						
+
 						if isDone {
 							return nil // 测试完成，退出循环
 						}
-						
+
 						// 等待1秒后再次检查
 						select {
 						case <-ctx.Done():
@@ -705,10 +705,10 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 					return nil // 达到最大尝试次数，继续执行
 				})
 			}(),
-			
+
 			// 额外等待一段时间确保地图更新
 			chromedp.Sleep(3*time.Second),
-			
+
 			// 截取中国地图元素
 			chromedp.Screenshot("#china_map", &buf, chromedp.NodeVisible, chromedp.ByQuery),
 		)
@@ -729,7 +729,7 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 
 	if err != nil {
 		log.Printf("itdog测速截图失败: %v", err)
-		
+
 		// 检查是否是服务熔断器开启的错误
 		if err.Error() == "circuit open" {
 			c.JSON(http.StatusServiceUnavailable, ScreenshotResponse{
@@ -739,15 +739,15 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 检查是否是网站无法访问的错误
-		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") || 
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
-		   strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") ||
-		   strings.Contains(err.Error(), "context deadline exceeded") ||
-		   strings.Contains(err.Error(), "TLS handshake timeout") {
+		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
+			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") ||
+			strings.Contains(err.Error(), "context deadline exceeded") ||
+			strings.Contains(err.Error(), "TLS handshake timeout") {
 			// 返回特定的错误信息，指示itdog网站无法访问
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -756,11 +756,11 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 检查是否是元素未找到的错误
-		if strings.Contains(err.Error(), "waiting for selector") || 
-		   strings.Contains(err.Error(), "not found") ||
-		   strings.Contains(err.Error(), "not visible") {
+		if strings.Contains(err.Error(), "waiting for selector") ||
+			strings.Contains(err.Error(), "not found") ||
+			strings.Contains(err.Error(), "not visible") {
 			// 返回特定的错误信息，指示元素未找到
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -769,7 +769,7 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 其他类型的错误
 		c.JSON(http.StatusOK, ScreenshotResponse{
 			Success: false,
@@ -857,16 +857,16 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	err = chromedp.Run(ctx,
 		// 导航到itdog测速页面
 		chromedp.Navigate(fmt.Sprintf("https://www.itdog.cn/ping/%s", domain)),
-		
+
 		// 等待"单次测试"按钮出现
 		chromedp.WaitVisible(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery),
-		
+
 		// 点击"单次测试"按钮
 		chromedp.Click(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery),
-		
+
 		// 等待测试完成 - 通过检查进度条
 		chromedp.Sleep(2*time.Second), // 先等待2秒让测试开始
-		
+
 		// 使用循环检查进度条，最多等待45秒
 		func() chromedp.Action {
 			return chromedp.ActionFunc(func(ctx context.Context) error {
@@ -886,15 +886,15 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 						// 确保进度值有效且达到总数
 						return total > 0 && current === total;
 					})()`, &isDone).Do(ctx)
-					
+
 					if err != nil {
 						return err
 					}
-					
+
 					if isDone {
 						return nil // 测试完成，退出循环
 					}
-					
+
 					// 等待1秒后再次检查
 					select {
 					case <-ctx.Done():
@@ -906,25 +906,25 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 				return nil // 达到最大尝试次数，继续执行
 			})
 		}(),
-		
+
 		// 额外等待一段时间确保地图更新
 		chromedp.Sleep(3*time.Second),
-		
+
 		// 截取中国地图元素
 		chromedp.Screenshot("#china_map", &buf, chromedp.NodeVisible, chromedp.ByQuery),
 	)
 
 	if err != nil {
 		log.Printf("itdog测速截图(Base64)失败: %v", err)
-		
+
 		// 检查是否是网站无法访问的错误
-		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") || 
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
-		   strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
-		   strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") ||
-		   strings.Contains(err.Error(), "context deadline exceeded") ||
-		   strings.Contains(err.Error(), "TLS handshake timeout") {
+		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
+			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") ||
+			strings.Contains(err.Error(), "context deadline exceeded") ||
+			strings.Contains(err.Error(), "TLS handshake timeout") {
 			// 返回特定的错误信息，指示itdog网站无法访问
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -933,11 +933,11 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 检查是否是元素未找到的错误
-		if strings.Contains(err.Error(), "waiting for selector") || 
-		   strings.Contains(err.Error(), "not found") ||
-		   strings.Contains(err.Error(), "not visible") {
+		if strings.Contains(err.Error(), "waiting for selector") ||
+			strings.Contains(err.Error(), "not found") ||
+			strings.Contains(err.Error(), "not visible") {
 			// 返回特定的错误信息，指示元素未找到
 			c.JSON(http.StatusOK, ScreenshotResponse{
 				Success: false,
@@ -946,7 +946,7 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 			})
 			return
 		}
-		
+
 		// 其他类型的错误
 		c.JSON(http.StatusOK, ScreenshotResponse{
 			Success: false,

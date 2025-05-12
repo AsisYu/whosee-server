@@ -1,92 +1,138 @@
 /*
  * @Author: AsisYu 2773943729@qq.com
- * @Date: 2025-01-17 21:22:04
- * @LastEditors: AsisYu 2773943729@qq.com
- * @LastEditTime: 2025-01-18 01:02:03
- * @FilePath: \dmainwhoseek\server\middleware\cors.go
- * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ * @Date: 2025-04-28 10:18:00
+ * @Description: 跨域请求的CORS配置内部实现
  */
 package middleware
 
 import (
-	"fmt"
-	"log"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-func Cors() gin.HandlerFunc {
+// CORSConfig 跨域请求的配置信息
+type CORSConfig struct {
+	AllowOrigins     []string      // 允许的来源域名
+	AllowMethods     []string      // 允许的HTTP方法
+	AllowHeaders     []string      // 允许的请求头
+	ExposeHeaders    []string      // 暴露给客户端的头信息
+	AllowCredentials bool          // 是否允许发送Cookie
+	MaxAge           time.Duration // 预检请求的缓存时间
+	AllowAllOrigins  bool          // 是否允许所有来源域名
+	UseWhitelist     bool          // 是否使用白名单
+}
+
+// DefaultCORSConfig 默认的CORS配置
+func DefaultCORSConfig() CORSConfig {
+	// 从环境变量中获取允许的来源域名
+	allowOrigins := []string{"localhost", "127.0.0.1", "https://whosee.me"}
+	if envOrigins := os.Getenv("CORS_ORIGINS"); envOrigins != "" {
+		allowOrigins = strings.Split(envOrigins, ",")
+		for i := range allowOrigins {
+			allowOrigins[i] = strings.TrimSpace(allowOrigins[i])
+		}
+	}
+
+	return CORSConfig{
+		AllowOrigins: allowOrigins,
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"},
+		AllowHeaders: []string{
+			"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With",
+			"X-API-KEY", "Access-Control-Request-Method", "Access-Control-Request-Headers",
+		},
+		ExposeHeaders:    []string{"Content-Length", "Content-Type", "X-Request-ID"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+		AllowAllOrigins:  false,
+		UseWhitelist:     true,
+	}
+}
+
+// CORS 跨域请求的中间件
+func CORS() gin.HandlerFunc {
+	return CORSWithConfig(DefaultCORSConfig())
+}
+
+// CORSWithConfig 根据配置生成CORS中间件
+func CORSWithConfig(config CORSConfig) gin.HandlerFunc {
+	// 初始化允许的来源域名列表
+	var allowOrigins []string
+	for _, origin := range config.AllowOrigins {
+		allowOrigins = append(allowOrigins, strings.ToLower(origin))
+	}
+
+	// 检查是否有通配符
+	wildcard := false
+	for _, origin := range allowOrigins {
+		if origin == "*" {
+			wildcard = true
+			break
+		}
+	}
+
 	return func(c *gin.Context) {
-		// 记录初始状态
-		fmt.Printf("收到请求，Origin: %s, Method: %s\n", c.Request.Header.Get("Origin"), c.Request.Method)
+		// 获取请求来源
+		origin := c.Request.Header.Get("Origin")
 
-		// 清除所有可能存在的 CORS 相关头
-		c.Writer.Header().Del("Access-Control-Allow-Origin")
-		c.Writer.Header().Del("Access-Control-Allow-Credentials")
-		c.Writer.Header().Del("Access-Control-Allow-Methods")
-		c.Writer.Header().Del("Access-Control-Allow-Headers")
-		c.Writer.Header().Del("Access-Control-Max-Age")
+		// 如果不是CORS请求，直接跳过
+		if origin == "" {
+			c.Next()
+			return
+		}
 
-		// 添加对任意域名OPTIONS请求的支持
+		// 检查来源是否在允许列表中
+		allowed := false
+
+		// 如果允许所有来源或使用通配符，直接允许
+		if config.AllowAllOrigins || wildcard {
+			allowed = true
+		} else {
+			// 检查来源是否在白名单中
+			origin = strings.ToLower(origin)
+			for _, allowedOrigin := range allowOrigins {
+				if allowedOrigin == origin {
+					allowed = true
+					break
+				}
+
+				// 支持通配符，如*.example.com
+				if strings.HasPrefix(allowedOrigin, "*.") {
+					domainSuffix := allowedOrigin[1:] // 去掉*
+					if strings.HasSuffix(origin, domainSuffix) {
+						allowed = true
+						break
+					}
+				}
+			}
+		}
+
+		// 如果不允许来源且使用白名单，直接跳过
+		if !allowed && config.UseWhitelist {
+			c.Next()
+			return
+		}
+
+		// 设置CORS头信息
+		c.Header("Access-Control-Allow-Origin", origin)
+		c.Header("Access-Control-Allow-Methods", strings.Join(config.AllowMethods, ", "))
+		c.Header("Access-Control-Allow-Headers", strings.Join(config.AllowHeaders, ", "))
+		c.Header("Access-Control-Expose-Headers", strings.Join(config.ExposeHeaders, ", "))
+		c.Header("Access-Control-Max-Age", string(int(config.MaxAge.Seconds())))
+
+		// 设置Credentials
+		if config.AllowCredentials {
+			c.Header("Access-Control-Allow-Credentials", "true")
+		}
+
+		// 处理OPTIONS预检请求
 		if c.Request.Method == "OPTIONS" {
-			origin := c.Request.Header.Get("Origin")
-			// 对任意域名的OPTIONS请求都返回允许的头部
-			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
-			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			c.Writer.Header().Set("Access-Control-Allow-Headers", "*")
-			c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 			c.AbortWithStatus(204)
 			return
 		}
 
-		origin := c.Request.Header.Get("Origin")
-		
-		// 如果没有Origin头，可能是内部请求或健康检查，直接通过
-		if origin == "" {
-			// 这是内部请求或健康检查，不需要CORS头
-			if c.Request.URL.Path == "/api/health" {
-				// 健康检查路径，不记录日志以减少噪音
-			} else {
-				// 其他内部请求，记录但不显示为错误
-				log.Printf("内部请求或无Origin请求: %s %s", c.Request.Method, c.Request.URL.Path)
-			}
-			c.Next()
-			return
-		}
-		
-		// 允许的域名列表
-		allowedOrigins := map[string]bool{
-			"http://localhost:8080":           true, // Vue开发环境
-			"http://localhost:3000":           true, // 开发环境
-			"http://localhost:5173":           true, // SvelteKit开发环境
-			"https://domain-whois.vercel.app": true, // 生产环境
-			"https://whosee.me":               true, //域名
-		}
-
-		// 如果是允许的域名，设置对应的 CORS 头
-		if allowedOrigins[origin] {
-			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
-			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-			c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			c.Writer.Header().Set("Access-Control-Allow-Headers",
-				"Content-Type, Authorization, X-Requested-With, Accept")
-			// 添加允许的响应头
-			c.Writer.Header().Set("Access-Control-Expose-Headers", "X-Cache")
-			c.Writer.Header().Set("Access-Control-Max-Age", "86400")
-
-			// 记录设置的 CORS 头
-			fmt.Printf("设置 CORS 头部 - Origin: %s\n", origin)
-			fmt.Printf("当前所有 Access-Control-Allow-Origin 头: %v\n",
-				c.Writer.Header()["Access-Control-Allow-Origin"])
-		} else {
-			fmt.Printf("请求来源不在允许列表中: %s\n", origin)
-		}
-
 		c.Next()
-
-		// 记录最终响应头
-		fmt.Printf("响应完成，最终的 CORS 头: %v\n",
-			c.Writer.Header()["Access-Control-Allow-Origin"])
 	}
 }

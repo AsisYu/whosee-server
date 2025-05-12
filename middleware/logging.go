@@ -1,3 +1,8 @@
+/*
+ * @Author: AsisYu 2773943729@qq.com
+ * @Date: 2025-03-31 04:10:00
+ * @Description: 日志中间件
+ */
 package middleware
 
 import (
@@ -28,6 +33,9 @@ type LogFormat struct {
 	RequestBody  interface{} `json:"request_body,omitempty"`
 	RequestSize  int         `json:"request_size"`
 	ResponseSize int         `json:"response_size"`
+	Endpoint     string      `json:"endpoint,omitempty"`   // 新增：API端点标识
+	Operation    string      `json:"operation,omitempty"`  // 新增：操作类型
+	Parameters   interface{} `json:"parameters,omitempty"` // 新增：请求参数
 }
 
 // EnhancedLogging 提供增强的日志功能
@@ -43,17 +51,39 @@ func EnhancedLogging() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		raw := c.Request.URL.RawQuery
 
+		// 获取端点标识
+		endpoint := getEndpointName(path)
+		operation := getOperationType(path)
+
+		// 记录请求开始
+		log.Printf("[%s] %s 开始处理 | %15s | %s?%s | ID:%s",
+			operation, endpoint, c.ClientIP(), path, raw, requestID)
+
 		// 记录请求体（仅记录POST、PUT等非GET请求，且内容长度受限）
 		var requestBody interface{}
 		var requestBodySize int
+		var params interface{}
+
 		if c.Request.Method != "GET" && c.Request.ContentLength < 10240 { // 限制10KB
 			bodyBytes, _ := io.ReadAll(c.Request.Body)
 			requestBodySize = len(bodyBytes)
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-			
+
 			// 尝试解析JSON
 			if strings.Contains(c.ContentType(), "application/json") {
 				json.Unmarshal(bodyBytes, &requestBody)
+				params = requestBody
+			}
+		} else if c.Request.Method == "GET" {
+			// 对于GET请求，记录查询参数
+			if raw != "" {
+				queryMap := make(map[string]string)
+				for k, v := range c.Request.URL.Query() {
+					if len(v) > 0 {
+						queryMap[k] = v[0]
+					}
+				}
+				params = queryMap
 			}
 		}
 
@@ -66,7 +96,7 @@ func EnhancedLogging() gin.HandlerFunc {
 
 		// 计算延迟
 		latency := time.Since(start)
-		
+
 		// 获取错误信息（如果有）
 		errorMessage := ""
 		if len(c.Errors) > 0 {
@@ -88,9 +118,26 @@ func EnhancedLogging() gin.HandlerFunc {
 			RequestBody:  requestBody,
 			RequestSize:  requestBodySize,
 			ResponseSize: blw.body.Len(),
+			Endpoint:     endpoint,
+			Operation:    operation,
+			Parameters:   params,
 		}
 
-		// 简化控制台日志输出
+		// 构建请求完成日志
+		statusText := "成功"
+		logPrefix := "[完成]"
+		if c.Writer.Status() >= 400 {
+			statusText = "失败"
+			logPrefix = "[错误]"
+		}
+
+		// 记录请求结束
+		log.Printf("%s [%s] %s 处理%s | %3d | %13v | %15s | %s?%s",
+			logPrefix, operation, endpoint, statusText,
+			logEntry.StatusCode, logEntry.Latency,
+			logEntry.ClientIP, path, raw)
+
+		// 简化控制台日志输出 - 保留原来的格式以兼容现有日志分析工具
 		log.Printf("[API] %v | %3d | %13v | %15s | %-7s %s%s%s",
 			logEntry.TimeStamp,
 			logEntry.StatusCode,
@@ -118,6 +165,37 @@ func EnhancedLogging() gin.HandlerFunc {
 			log.Printf("[详细] %s", string(jsonLog))
 		}
 	}
+}
+
+// getEndpointName 从路径获取端点名称
+func getEndpointName(path string) string {
+	// 移除API前缀并按路径段分割
+	pathParts := strings.Split(strings.TrimPrefix(path, "/api/"), "/")
+
+	// 提取主要端点名称
+	if len(pathParts) > 0 && pathParts[0] != "" {
+		return strings.ToUpper(pathParts[0])
+	}
+
+	return "ROOT"
+}
+
+// getOperationType 从路径获取操作类型
+func getOperationType(path string) string {
+	// 根据路径确定操作类型
+	if strings.Contains(path, "/api/query") {
+		return "WHOIS"
+	} else if strings.Contains(path, "/api/dns") {
+		return "DNS"
+	} else if strings.Contains(path, "/api/screenshot") {
+		return "SCREENSHOT"
+	} else if strings.Contains(path, "/api/health") {
+		return "HEALTH"
+	} else if strings.Contains(path, "/api/auth") {
+		return "AUTH"
+	}
+
+	return "API"
 }
 
 // bodyLogWriter 是一个响应体日志记录包装器
