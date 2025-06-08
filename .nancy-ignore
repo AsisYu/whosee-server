@@ -1,0 +1,8 @@
+# Nancy ignore file
+# Add CVE IDs or OSS Index IDs here to exclude them from vulnerability scanning
+# Example:
+# CVE-2021-12345
+# sonatype-2021-0001
+
+# You can add specific vulnerabilities to ignore here if they are false positives
+# or have been assessed as not applicable to your use case 
