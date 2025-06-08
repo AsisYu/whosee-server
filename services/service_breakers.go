@@ -44,16 +44,18 @@ func (sb *ServiceBreakers) init() {
 			log.Printf("信息: 截图服务已恢复正常")
 		}
 	})
-	
-	// ITDog服务熔断器 - 3次失败后熔断，45秒后尝试恢复
-	sb.ItdogBreaker = NewCircuitBreaker(3, 45*time.Second)
+
+	// ITDog服务熔断器 - 增加失败阈值和重置时间，降低敏感度
+	sb.ItdogBreaker = NewCircuitBreaker(8, 120*time.Second) // 从3次失败改为8次，重置时间从45秒改为120秒
 	sb.ItdogBreaker.OnStateChange(func(from, to CircuitState) {
 		log.Printf("ITDog服务熔断器状态从 %v 变更为 %v", from, to)
 		// 当熔断器开启时可以触发告警或其他操作
 		if to == StateOpen {
-			log.Printf("警告: ITDog服务可能不可用，已启动熔断保护")
+			log.Printf("警告: ITDog服务连续失败超过阈值，已启动熔断保护")
 		} else if to == StateClosed {
 			log.Printf("信息: ITDog服务已恢复正常")
+		} else if to == StateHalfOpen {
+			log.Printf("信息: ITDog服务正在尝试恢复，处于半开状态")
 		}
 	})
 }
@@ -76,7 +78,7 @@ func CircuitStateToString(state CircuitState) string {
 func (sb *ServiceBreakers) GetScreenshotBreakerStatus() map[string]interface{} {
 	sb.ScreenshotBreaker.mutex.RLock()
 	defer sb.ScreenshotBreaker.mutex.RUnlock()
-	
+
 	return map[string]interface{}{
 		"state":            CircuitStateToString(sb.ScreenshotBreaker.state),
 		"failureCount":     sb.ScreenshotBreaker.failureCount,
@@ -90,7 +92,7 @@ func (sb *ServiceBreakers) GetScreenshotBreakerStatus() map[string]interface{} {
 func (sb *ServiceBreakers) GetItdogBreakerStatus() map[string]interface{} {
 	sb.ItdogBreaker.mutex.RLock()
 	defer sb.ItdogBreaker.mutex.RUnlock()
-	
+
 	return map[string]interface{}{
 		"state":            CircuitStateToString(sb.ItdogBreaker.state),
 		"failureCount":     sb.ItdogBreaker.failureCount,

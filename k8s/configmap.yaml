@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: whosee-server-config
+data:
+  APP_VERSION: "1.1.0"
+  PORT: "3000"
+  GIN_MODE: "release"
+  HEALTH_CHECK_INTERVAL_DAYS: "3"
+  API_DEV_MODE: "false"
+  DISABLE_API_SECURITY: "false"
+  IP_WHITELIST_CACHE_EXPIRATION: "300"
+  RATE_LIMIT_API: "60"
+  RATE_LIMIT_BURST: "10"
+  REDIS_DB: "0"
+  CSP_SOURCES: "'self'"
+  CORS_ALLOWED_ORIGINS: "https://whosee.me,https://whois-api.os.tn"
+  CORS_ALLOWED_METHODS: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+  CORS_ALLOWED_HEADERS: "Origin,Content-Type,Accept,Authorization,X-Requested-With"
+  CORS_EXPOSED_HEADERS: "Content-Length,X-Cache"
+  CORS_MAX_AGE: "43200"

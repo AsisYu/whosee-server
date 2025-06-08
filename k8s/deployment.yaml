@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whosee-whois-server
+  labels:
+    app: whosee-whois-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: whosee-whois-server
+  template:
+    metadata:
+      labels:
+        app: whosee-whois-server
+    spec:
+      # Chrome需要特殊的安全上下文配置
+      securityContext:
+        fsGroup: 1001
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+      - name: whosee-whois-server
+        image: ${REGISTRY_ADDR}/${REGISTRY_NAMESPACE}/whosee-whois-server:latest
+        ports:
+        - containerPort: 3000
+        # Chrome优化的资源配置
+        resources:
+          limits:
+            cpu: "1.5"        # 增加CPU限制支持Chrome
+            memory: "1.5Gi"   # 大幅增加内存限制支持Chrome单例
+          requests:
+            cpu: "500m"       # 增加CPU请求
+            memory: "512Mi"   # 增加内存请求
+        # Chrome运行环境变量
+        env:
+          - name: REDIS_ADDR
+            value: "whosee-redis:6379"
+          - name: GIN_MODE
+            value: "release"
+          # Chrome优化环境变量
+          - name: CHROME_BIN
+            value: "/usr/bin/chromium-browser"
+          - name: CHROME_NO_SANDBOX
+            value: "true"
+          - name: CHROME_DISABLE_GPU
+            value: "true"
+          - name: CHROME_DISABLE_DEV_SHM
+            value: "true"
+          - name: CHROME_USER_DATA_DIR
+            value: "/tmp/chrome-user-data"
+          # Go运行时优化
+          - name: GOMEMLIMIT
+            value: "1280MiB"
+          - name: GOGC
+            value: "100"
+        envFrom:
+          - configMapRef:
+              name: whosee-server-config
+          - secretRef:
+              name: whosee-server-secrets
+        # Chrome需要的挂载点
+        volumeMounts:
+          - name: logs-volume
+            mountPath: /app/logs
+          - name: screenshots-volume
+            mountPath: /app/static/screenshots
+          - name: itdog-volume
+            mountPath: /app/static/itdog
+          # Chrome临时数据目录
+          - name: chrome-tmp
+            mountPath: /tmp/chrome-user-data
+          # 共享内存，Chrome需要
+          - name: dshm
+            mountPath: /dev/shm
+        # Chrome安全上下文
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false  # Chrome需要写入权限
+          runAsNonRoot: true
+          runAsUser: 1001
+        # 增加健康检查时间，Chrome启动需要更长时间
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 60  # 增加到60秒，Chrome需要启动时间
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30  # 增加到30秒
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+        - name: logs-volume
+          persistentVolumeClaim:
+            claimName: whosee-logs-pvc
+        - name: screenshots-volume
+          persistentVolumeClaim:
+            claimName: whosee-screenshots-pvc
+        - name: itdog-volume
+          persistentVolumeClaim:
+            claimName: whosee-itdog-pvc
+        # Chrome临时数据目录
+        - name: chrome-tmp
+          emptyDir:
+            sizeLimit: 500Mi
+        # 共享内存，Chrome需要
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi

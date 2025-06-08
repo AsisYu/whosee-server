@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"context"
+	"dmainwhoseek/services"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -17,20 +18,21 @@ import (
 	"strings"
 	"time"
 
+	"dmainwhoseek/utils"
+
 	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
-
-	"dmainwhoseek/services"
 )
 
 // ScreenshotResponse 定义截图API的响应结构
 type ScreenshotResponse struct {
-	Success   bool   `json:"success"`
-	ImageUrl  string `json:"imageUrl,omitempty"`
-	FromCache bool   `json:"fromCache,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Success     bool   `json:"success"`
+	ImageUrl    string `json:"imageUrl,omitempty"`
+	ImageBase64 string `json:"imageBase64,omitempty"`
+	FromCache   bool   `json:"fromCache,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Message     string `json:"message,omitempty"`
 }
 
 // ElementScreenshotRequest 定义元素截图请求结构
@@ -49,7 +51,341 @@ const screenshotDir = "./static/screenshots"
 // ITDog测速截图存储目录
 const itdogScreenshotDir = "./static/itdog"
 
-// 截图 处理域名截图请求
+// ITDogScreenshotConfig ITDog截图配置
+type ITDogScreenshotConfig struct {
+	Domain      string
+	CacheKey    string
+	FileName    string
+	FileURL     string
+	FilePath    string
+	Selector    string // 截图元素选择器
+	Description string // 截图描述（用于日志）
+}
+
+// performITDogScreenshot 执行ITDog截图的通用函数
+func performITDogScreenshot(config ITDogScreenshotConfig, rdb *redis.Client) (*ScreenshotResponse, error) {
+	// 检查ITDog测速服务熔断器状态
+	sb := services.GetServiceBreakers()
+	if !sb.ItdogBreaker.AllowRequest() {
+		log.Printf("ITDog测速服务熔断器开启，拒绝请求: %s", config.Domain)
+		return &ScreenshotResponse{
+			Success: false,
+			Error:   "ITDog测速服务暂不可用",
+			Message: "服务过载，请稍后再试",
+		}, nil
+	}
+
+	// 检查缓存
+	cachedData, err := rdb.Get(context.Background(), config.CacheKey).Result()
+	if err == nil {
+		// 缓存命中
+		var response ScreenshotResponse
+		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
+			log.Printf("使用缓存的%s: %s", config.Description, config.Domain)
+			response.FromCache = true
+			return &response, nil
+		}
+	}
+
+	// 确保截图目录存在
+	if err := os.MkdirAll(itdogScreenshotDir, 0755); err != nil {
+		log.Printf("创建ITDog截图目录失败: %v", err)
+		return &ScreenshotResponse{
+			Success: false,
+			Error:   "服务器内部错误",
+		}, nil
+	}
+
+	// 使用统一的Chrome管理器获取截图
+	log.Printf("开始获取%s (统一浏览器): %s", config.Description, config.Domain)
+
+	// 执行截图
+	err = sb.ItdogBreaker.Execute(func() error {
+		// 获取全局Chrome工具
+		chromeUtil := utils.GetGlobalChromeUtil()
+		if chromeUtil == nil {
+			return fmt.Errorf("Chrome工具未初始化")
+		}
+
+		// 增加重试机制
+		maxRetries := 2
+		for retry := 0; retry <= maxRetries; retry++ {
+			if retry > 0 {
+				log.Printf("[CHROME-UTIL] %s重试第 %d 次", config.Description, retry)
+				time.Sleep(time.Duration(retry) * 2 * time.Second) // 递增等待时间
+			}
+
+			// 从Chrome工具获取上下文，设置120秒超时（增加超时时间）
+			ctx, cancel, chromeErr := chromeUtil.GetContext(120 * time.Second)
+			if chromeErr != nil {
+				log.Printf("[CHROME-UTIL] 获取Chrome上下文失败 (重试 %d/%d): %v", retry, maxRetries, chromeErr)
+				if retry == maxRetries {
+					return fmt.Errorf("获取Chrome上下文失败: %v", chromeErr)
+				}
+				continue
+			}
+
+			// 检查上下文初始状态
+			select {
+			case <-ctx.Done():
+				cancel()
+				log.Printf("[CHROME-UTIL] 上下文在使用前已被取消 (重试 %d/%d)", retry, maxRetries)
+				if retry == maxRetries {
+					return fmt.Errorf("上下文在使用前已被取消")
+				}
+				continue
+			default:
+			}
+
+			log.Printf("[CHROME-UTIL] 开始执行%s操作，域名: %s (重试 %d/%d)", config.Description, config.Domain, retry, maxRetries)
+
+			// 截图数据
+			var buf []byte
+
+			// 执行截图操作
+			err := chromedp.Run(ctx,
+				// 导航到itdog测速页面
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					// 检查上下文状态
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤1: 导航到ITDog页面: %s", fmt.Sprintf("https://www.itdog.cn/ping/%s", config.Domain))
+					return chromedp.Navigate(fmt.Sprintf("https://www.itdog.cn/ping/%s", config.Domain)).Do(ctx)
+				}),
+
+				// 等待页面加载
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤2: 等待页面加载完成")
+					return chromedp.Sleep(2 * time.Second).Do(ctx)
+				}),
+
+				// 等待"单次测试"按钮出现，增加超时时间
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤3: 等待单次测试按钮出现")
+					return chromedp.WaitVisible(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery).Do(ctx)
+				}),
+
+				// 点击"单次测试"按钮
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤4: 点击单次测试按钮")
+					return chromedp.Click(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery).Do(ctx)
+				}),
+
+				// 等待测试开始
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤5: 等待测试开始")
+					return chromedp.Sleep(3 * time.Second).Do(ctx)
+				}),
+
+				// 使用循环检查进度条，最多等待60秒（增加等待时间）
+				func() chromedp.Action {
+					return chromedp.ActionFunc(func(ctx context.Context) error {
+						var isDone bool
+						var attempts int
+						maxAttempts := 60 // 增加最大尝试次数
+
+						log.Printf("[CHROME-UTIL] 步骤6: 开始检查%s测试进度", config.Description)
+
+						for attempts < maxAttempts {
+							// 检查上下文是否已取消
+							select {
+							case <-ctx.Done():
+								log.Printf("[CHROME-UTIL] %s上下文已取消，停止等待", config.Description)
+								return ctx.Err()
+							default:
+							}
+
+							// 执行JavaScript检查进度
+							err := chromedp.Evaluate(`(() => {
+								const progressBar = document.querySelector('.progress-bar');
+								const nodeNum = document.querySelector('#check_node_num');
+								if (!progressBar || !nodeNum) return false;
+								
+								// 获取当前进度值和总节点数
+								const current = parseInt(progressBar.getAttribute('aria-valuenow') || '0');
+								const total = parseInt(nodeNum.textContent || '0');
+								
+								// 确保进度值有效且达到总数
+								return total > 0 && current === total;
+							})()`, &isDone).Do(ctx)
+
+							if err != nil {
+								log.Printf("[CHROME-UTIL] %s进度检查出错: %v", config.Description, err)
+								return err
+							}
+
+							if isDone {
+								log.Printf("[CHROME-UTIL] %s测试完成，进度: %d/%d", config.Description, attempts, maxAttempts)
+								return nil // 测试完成，退出循环
+							}
+
+							// 每5次尝试打印一次进度
+							if attempts%5 == 0 && attempts > 0 {
+								log.Printf("[CHROME-UTIL] %s等待测试完成，已等待 %d 秒", config.Description, attempts)
+							}
+
+							// 等待1秒后再次检查
+							select {
+							case <-ctx.Done():
+								return ctx.Err()
+							case <-time.After(1 * time.Second):
+								attempts++
+							}
+						}
+
+						log.Printf("[CHROME-UTIL] %s等待超时，已尝试 %d 次", config.Description, attempts)
+						return nil // 达到最大尝试次数，继续执行
+					})
+				}(),
+
+				// 额外等待一段时间确保页面元素更新
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤7: 等待页面元素更新")
+					return chromedp.Sleep(5 * time.Second).Do(ctx)
+				}),
+
+				// 截取指定元素 - 检查是否是XPath选择器
+				func() chromedp.Action {
+					return chromedp.ActionFunc(func(ctx context.Context) error {
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						default:
+						}
+						log.Printf("[CHROME-UTIL] 步骤8: 开始截图")
+						if strings.HasPrefix(config.Selector, "//") {
+							// 使用XPath选择器
+							log.Printf("[CHROME-UTIL] 使用XPath选择器截图: %s", config.Selector)
+							return chromedp.Screenshot(config.Selector, &buf, chromedp.NodeVisible, chromedp.BySearch).Do(ctx)
+						} else {
+							// 使用CSS选择器
+							log.Printf("[CHROME-UTIL] 使用CSS选择器截图: %s", config.Selector)
+							return chromedp.Screenshot(config.Selector, &buf, chromedp.NodeVisible, chromedp.ByQuery).Do(ctx)
+						}
+					})
+				}(),
+			)
+
+			// 清理资源
+			cancel()
+
+			if err != nil {
+				log.Printf("[CHROME-UTIL] %s失败 (重试 %d/%d): %v", config.Description, retry, maxRetries, err)
+				if strings.Contains(err.Error(), "context canceled") && retry < maxRetries {
+					continue // 重试
+				}
+				if retry == maxRetries {
+					return err
+				}
+				continue
+			}
+
+			log.Printf("[CHROME-UTIL] %s截图成功，大小: %d bytes", config.Description, len(buf))
+
+			// 保存截图
+			if err := os.WriteFile(config.FilePath, buf, 0644); err != nil {
+				log.Printf("保存%s失败: %v", config.Description, err)
+				return err
+			}
+
+			return nil // 成功完成
+		}
+
+		return fmt.Errorf("重试次数耗尽")
+	})
+
+	if err != nil {
+		log.Printf("%s失败: %v", config.Description, err)
+
+		// 检查是否是服务熔断器开启的错误
+		if err.Error() == "circuit open" {
+			return &ScreenshotResponse{
+				Success: false,
+				Error:   "ITDog测速服务暂不可用",
+				Message: "服务过载，请稍后再试",
+			}, nil
+		}
+
+		// 检查是否是网站无法访问的错误
+		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
+			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
+			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") ||
+			strings.Contains(err.Error(), "context deadline exceeded") ||
+			strings.Contains(err.Error(), "TLS handshake timeout") {
+			// 返回特定的错误信息，指示itdog网站无法访问
+			return &ScreenshotResponse{
+				Success: false,
+				Error:   "ITDog测速网站无法访问",
+				Message: fmt.Sprintf("无法连接到ITDog测速网站: %s", config.Domain),
+			}, nil
+		}
+
+		// 检查是否是元素未找到的错误
+		if strings.Contains(err.Error(), "waiting for selector") ||
+			strings.Contains(err.Error(), "not found") ||
+			strings.Contains(err.Error(), "not visible") {
+			// 返回特定的错误信息，指示元素未找到
+			return &ScreenshotResponse{
+				Success: false,
+				Error:   "无法获取测速内容",
+				Message: fmt.Sprintf("无法在itdog网站上找到%s元素，域名: %s", config.Description, config.Domain),
+			}, nil
+		}
+
+		// 其他类型的错误
+		return &ScreenshotResponse{
+			Success: false,
+			Error:   fmt.Sprintf("%s操作失败: %v", config.Description, err),
+		}, nil
+	}
+
+	// 构建响应
+	response := &ScreenshotResponse{
+		Success:   true,
+		ImageUrl:  config.FileURL,
+		FromCache: false,
+	}
+
+	// 缓存结果 (12小时)
+	if responseJSON, err := json.Marshal(response); err == nil {
+		rdb.Set(context.Background(), config.CacheKey, responseJSON, 12*time.Hour)
+	}
+
+	log.Printf("%s完成: %s", config.Description, config.Domain)
+	return response, nil
+}
+
+// Screenshot 处理域名截图请求
 func Screenshot(c *gin.Context, rdb *redis.Client) {
 	domain := c.Param("domain")
 	if domain == "" {
@@ -290,9 +626,10 @@ func ScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 
 	// 构建响应
 	response := ScreenshotResponse{
-		Success:   true,
-		ImageUrl:  dataURI,
-		FromCache: false,
+		Success:     true,
+		ImageUrl:    dataURI,
+		ImageBase64: base64Data,
+		FromCache:   false,
 	}
 
 	// 缓存响应
@@ -554,9 +891,10 @@ func ElementScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 
 	// 构建响应
 	response := ScreenshotResponse{
-		Success:   true,
-		ImageUrl:  dataURI,
-		FromCache: false,
+		Success:     true,
+		ImageUrl:    dataURI,
+		ImageBase64: base64Data,
+		FromCache:   false,
 	}
 
 	// 缓存响应
@@ -567,7 +905,7 @@ func ElementScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	c.JSON(http.StatusOK, response)
 }
 
-// ItdogScreenshot 处理itdog测速截图请求
+// ItdogScreenshot ITDog测速地图截图（使用统一Chrome管理器）
 func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 	domain := c.Param("domain")
 	if domain == "" {
@@ -590,214 +928,212 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 		return
 	}
 
-	// 检查ITDog测速服务熔断器状态
-	sb := services.GetServiceBreakers()
-	if !sb.ItdogBreaker.AllowRequest() {
-		log.Printf("ITDog测速服务熔断器开启，拒绝请求: %s", domain)
-		c.JSON(http.StatusServiceUnavailable, ScreenshotResponse{
-			Success: false,
-			Error:   "ITDog测速服务暂不可用",
-			Message: "服务过载，请稍后再试",
-		})
-		return
+	// 配置截图参数
+	config := ITDogScreenshotConfig{
+		Domain:      domain,
+		CacheKey:    fmt.Sprintf("itdog_screenshot:%s", domain),
+		FileName:    fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix()),
+		FileURL:     fmt.Sprintf("/static/itdog/itdog_%s_%d.png", domain, time.Now().Unix()),
+		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix())),
+		Selector:    "#china_map",
+		Description: "itdog测速地图截图",
 	}
-
-	// 构建缓存键
-	cacheKey := fmt.Sprintf("itdog_screenshot:%s", domain)
-
-	// 检查缓存
-	cachedData, err := rdb.Get(context.Background(), cacheKey).Result()
-	if err == nil {
-		// 缓存命中
-		var response ScreenshotResponse
-		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			log.Printf("使用缓存的itdog测速截图: %s", domain)
-			response.FromCache = true
-			c.JSON(http.StatusOK, response)
-			return
-		}
-	}
-
-	// 确保截图目录存在
-	if err := os.MkdirAll(itdogScreenshotDir, 0755); err != nil {
-		log.Printf("创建ITDog截图目录失败: %v", err)
-		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
-			Success: false,
-			Error:   "服务器内部错误",
-		})
-		return
-	}
-
-	// 生成文件名
-	fileName := fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix())
-	filePath := filepath.Join(itdogScreenshotDir, fileName)
-	fileURL := fmt.Sprintf("/static/itdog/%s", fileName)
-
-	// 使用chromedp获取截图
-	log.Printf("开始获取itdog测速截图: %s", domain)
 
 	// 执行截图
-	err = sb.ItdogBreaker.Execute(func() error {
-		// 创建上下文
-		ctx, cancel := chromedp.NewContext(
-			context.Background(),
-			chromedp.WithLogf(log.Printf),
-		)
-		defer cancel()
-
-		// 设置超时 - 允许超时90秒，避免服务不可用
-		ctx, cancel = context.WithTimeout(ctx, 90*time.Second)
-		defer cancel()
-
-		// 截图数据
-		var buf []byte
-
-		// 执行截图
-		err := chromedp.Run(ctx,
-			// 导航到itdog测速页面
-			chromedp.Navigate(fmt.Sprintf("https://www.itdog.cn/ping/%s", domain)),
-
-			// 等待"单次测试"按钮出现
-			chromedp.WaitVisible(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery),
-
-			// 点击"单次测试"按钮
-			chromedp.Click(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery),
-
-			// 等待测试完成 - 通过检查进度条
-			chromedp.Sleep(2*time.Second), // 先等待2秒让测试开始
-
-			// 使用循环检查进度条，最多等待45秒
-			func() chromedp.Action {
-				return chromedp.ActionFunc(func(ctx context.Context) error {
-					var isDone bool
-					var attempts int
-					for attempts < 45 { // 最多尝试45次，每次等待1秒
-						// 执行JavaScript检查进度
-						err := chromedp.Evaluate(`(() => {
-							const progressBar = document.querySelector('.progress-bar');
-							const nodeNum = document.querySelector('#check_node_num');
-							if (!progressBar || !nodeNum) return false;
-							
-							// 获取当前进度值和总节点数
-							const current = parseInt(progressBar.getAttribute('aria-valuenow') || '0');
-							const total = parseInt(nodeNum.textContent || '0');
-							
-							// 确保进度值有效且达到总数
-							return total > 0 && current === total;
-						})()`, &isDone).Do(ctx)
-
-						if err != nil {
-							return err
-						}
-
-						if isDone {
-							return nil // 测试完成，退出循环
-						}
-
-						// 等待1秒后再次检查
-						select {
-						case <-ctx.Done():
-							return ctx.Err()
-						case <-time.After(1 * time.Second):
-							attempts++
-						}
-					}
-					return nil // 达到最大尝试次数，继续执行
-				})
-			}(),
-
-			// 额外等待一段时间确保地图更新
-			chromedp.Sleep(3*time.Second),
-
-			// 截取中国地图元素
-			chromedp.Screenshot("#china_map", &buf, chromedp.NodeVisible, chromedp.ByQuery),
-		)
-
-		if err != nil {
-			log.Printf("itdog测速截图失败: %v", err)
-			return err
-		}
-
-		// 保存截图
-		if err := os.WriteFile(filePath, buf, 0644); err != nil {
-			log.Printf("保存itdog测速截图失败: %v", err)
-			return err
-		}
-
-		return nil
-	})
-
+	response, err := performITDogScreenshot(config, rdb)
 	if err != nil {
-		log.Printf("itdog测速截图失败: %v", err)
-
-		// 检查是否是服务熔断器开启的错误
-		if err.Error() == "circuit open" {
-			c.JSON(http.StatusServiceUnavailable, ScreenshotResponse{
-				Success: false,
-				Error:   "ITDog测速服务暂不可用",
-				Message: "服务过载，请稍后再试",
-			})
-			return
-		}
-
-		// 检查是否是网站无法访问的错误
-		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
-			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
-			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
-			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
-			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") ||
-			strings.Contains(err.Error(), "context deadline exceeded") ||
-			strings.Contains(err.Error(), "TLS handshake timeout") {
-			// 返回特定的错误信息，指示itdog网站无法访问
-			c.JSON(http.StatusOK, ScreenshotResponse{
-				Success: false,
-				Error:   "ITDog测速网站无法访问",
-				Message: fmt.Sprintf("无法连接到ITDog测速网站: %s", domain),
-			})
-			return
-		}
-
-		// 检查是否是元素未找到的错误
-		if strings.Contains(err.Error(), "waiting for selector") ||
-			strings.Contains(err.Error(), "not found") ||
-			strings.Contains(err.Error(), "not visible") {
-			// 返回特定的错误信息，指示元素未找到
-			c.JSON(http.StatusOK, ScreenshotResponse{
-				Success: false,
-				Error:   "无法获取测速地图",
-				Message: fmt.Sprintf("无法在itdog网站上找到测速地图元素，域名: %s", domain),
-			})
-			return
-		}
-
-		// 其他类型的错误
-		c.JSON(http.StatusOK, ScreenshotResponse{
-			Success: false,
-			Error:   fmt.Sprintf("itdog测速截图失败: %v", err),
-		})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 构建响应
-	response := ScreenshotResponse{
-		Success:   true,
-		ImageUrl:  fileURL,
-		FromCache: false,
+	if response.Success == false {
+		if strings.Contains(response.Error, "暂不可用") {
+			c.JSON(http.StatusServiceUnavailable, response)
+		} else {
+			c.JSON(http.StatusOK, response)
+		}
+		return
 	}
 
-	// 缓存响应
-	if responseJSON, err := json.Marshal(response); err == nil {
-		rdb.Set(context.Background(), cacheKey, responseJSON, screenshotCacheDuration)
-	}
-
-	// 计算耗时
-	duration := time.Since(startTime).Milliseconds()
-	log.Printf("itdog测速截图完成: %s, 耗时: %dms", domain, duration)
+	// 计算总耗时
+	elapsedTime := time.Since(startTime)
+	log.Printf("itdog测速地图截图完成: %s, 耗时: %v", domain, elapsedTime)
 
 	c.JSON(http.StatusOK, response)
 }
 
-// ItdogScreenshotBase64 返回Base64编码的itdog测速截图
+// ItdogTableScreenshot ITDog测速表格截图（使用统一Chrome管理器）
+func ItdogTableScreenshot(c *gin.Context, rdb *redis.Client) {
+	domain := c.Param("domain")
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "域名参数必填",
+		})
+		return
+	}
+
+	// 记录开始时间，用于计算耗时
+	startTime := time.Now()
+
+	// 检查域名格式
+	if !strings.Contains(domain, ".") {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "无效的域名格式",
+		})
+		return
+	}
+
+	// 配置截图参数
+	config := ITDogScreenshotConfig{
+		Domain:      domain,
+		CacheKey:    fmt.Sprintf("itdog_table_screenshot:%s", domain),
+		FileName:    fmt.Sprintf("itdog_table_%s_%d.png", domain, time.Now().Unix()),
+		FileURL:     fmt.Sprintf("/static/itdog/itdog_table_%s_%d.png", domain, time.Now().Unix()),
+		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_table_%s_%d.png", domain, time.Now().Unix())),
+		Selector:    ".card.mb-0[style*='height:550px']",
+		Description: "itdog测速表格截图",
+	}
+
+	// 执行截图
+	response, err := performITDogScreenshot(config, rdb)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if response.Success == false {
+		if strings.Contains(response.Error, "暂不可用") {
+			c.JSON(http.StatusServiceUnavailable, response)
+		} else {
+			c.JSON(http.StatusOK, response)
+		}
+		return
+	}
+
+	// 计算总耗时
+	elapsedTime := time.Since(startTime)
+	log.Printf("itdog测速表格截图完成: %s, 耗时: %v", domain, elapsedTime)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// ItdogIPScreenshot ITDog IP统计截图（使用统一Chrome管理器）
+func ItdogIPScreenshot(c *gin.Context, rdb *redis.Client) {
+	domain := c.Param("domain")
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "域名参数必填",
+		})
+		return
+	}
+
+	// 记录开始时间，用于计算耗时
+	startTime := time.Now()
+
+	// 检查域名格式
+	if !strings.Contains(domain, ".") {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "无效的域名格式",
+		})
+		return
+	}
+
+	// 配置截图参数
+	config := ITDogScreenshotConfig{
+		Domain:      domain,
+		CacheKey:    fmt.Sprintf("itdog_ip_screenshot:%s", domain),
+		FileName:    fmt.Sprintf("itdog_ip_%s_%d.png", domain, time.Now().Unix()),
+		FileURL:     fmt.Sprintf("/static/itdog/itdog_ip_%s_%d.png", domain, time.Now().Unix()),
+		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_ip_%s_%d.png", domain, time.Now().Unix())),
+		Selector:    `//div[contains(@class, "card") and contains(@class, "mb-0")][.//h5[contains(text(), "域名解析统计")]]`,
+		Description: "itdog IP统计截图",
+	}
+
+	// 执行截图
+	response, err := performITDogScreenshot(config, rdb)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if response.Success == false {
+		if strings.Contains(response.Error, "暂不可用") {
+			c.JSON(http.StatusServiceUnavailable, response)
+		} else {
+			c.JSON(http.StatusOK, response)
+		}
+		return
+	}
+
+	// 计算总耗时
+	elapsedTime := time.Since(startTime)
+	log.Printf("itdog IP统计截图完成: %s, 耗时: %v", domain, elapsedTime)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// ItdogResolveScreenshot ITDog综合测速截图（使用统一Chrome管理器）
+func ItdogResolveScreenshot(c *gin.Context, rdb *redis.Client) {
+	domain := c.Param("domain")
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "域名参数必填",
+		})
+		return
+	}
+
+	// 记录开始时间，用于计算耗时
+	startTime := time.Now()
+
+	// 检查域名格式
+	if !strings.Contains(domain, ".") {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "无效的域名格式",
+		})
+		return
+	}
+
+	// 配置截图参数
+	config := ITDogScreenshotConfig{
+		Domain:      domain,
+		CacheKey:    fmt.Sprintf("itdog_resolve_screenshot:%s", domain),
+		FileName:    fmt.Sprintf("itdog_resolve_%s_%d.png", domain, time.Now().Unix()),
+		FileURL:     fmt.Sprintf("/static/itdog/itdog_resolve_%s_%d.png", domain, time.Now().Unix()),
+		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_resolve_%s_%d.png", domain, time.Now().Unix())),
+		Selector:    ".dt-responsive.table-responsive",
+		Description: "itdog综合测速截图",
+	}
+
+	// 执行截图
+	response, err := performITDogScreenshot(config, rdb)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if response.Success == false {
+		if strings.Contains(response.Error, "暂不可用") {
+			c.JSON(http.StatusServiceUnavailable, response)
+		} else {
+			c.JSON(http.StatusOK, response)
+		}
+		return
+	}
+
+	// 计算总耗时
+	elapsedTime := time.Since(startTime)
+	log.Printf("itdog综合测速截图完成: %s, 耗时: %v", domain, elapsedTime)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// ItdogScreenshotBase64 返回Base64编码的ITDog测速地图截图
 func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	domain := c.Param("domain")
 	if domain == "" {
@@ -820,102 +1156,475 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 		return
 	}
 
-	// 构建缓存键
-	cacheKey := fmt.Sprintf("itdog_screenshot_base64:%s", domain)
+	// 配置截图参数
+	config := ITDogScreenshotConfig{
+		Domain:      domain,
+		CacheKey:    fmt.Sprintf("itdog_screenshot_base64:%s", domain),
+		FileName:    fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix()),
+		FileURL:     fmt.Sprintf("/static/itdog/itdog_%s_%d.png", domain, time.Now().Unix()),
+		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix())),
+		Selector:    "#china_map",
+		Description: "itdog测速地图截图(Base64)",
+	}
+
+	// 执行截图
+	response, err := performITDogScreenshotBase64(config, rdb)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if response.Success == false {
+		if strings.Contains(response.Error, "暂不可用") {
+			c.JSON(http.StatusServiceUnavailable, response)
+		} else {
+			c.JSON(http.StatusOK, response)
+		}
+		return
+	}
+
+	// 计算总耗时
+	elapsedTime := time.Since(startTime)
+	log.Printf("itdog测速地图截图(Base64)完成: %s, 耗时: %v", domain, elapsedTime)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// ItdogTableScreenshotBase64 返回Base64编码的ITDog测速表格截图
+func ItdogTableScreenshotBase64(c *gin.Context, rdb *redis.Client) {
+	domain := c.Param("domain")
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "域名参数必填",
+		})
+		return
+	}
+
+	// 记录开始时间，用于计算耗时
+	startTime := time.Now()
+
+	// 检查域名格式
+	if !strings.Contains(domain, ".") {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "无效的域名格式",
+		})
+		return
+	}
+
+	// 配置截图参数
+	config := ITDogScreenshotConfig{
+		Domain:      domain,
+		CacheKey:    fmt.Sprintf("itdog_table_screenshot_base64:%s", domain),
+		FileName:    fmt.Sprintf("itdog_table_%s_%d.png", domain, time.Now().Unix()),
+		FileURL:     fmt.Sprintf("/static/itdog/itdog_table_%s_%d.png", domain, time.Now().Unix()),
+		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_table_%s_%d.png", domain, time.Now().Unix())),
+		Selector:    ".card.mb-0[style*='height:550px']",
+		Description: "itdog测速表格截图(Base64)",
+	}
+
+	// 执行截图
+	response, err := performITDogScreenshotBase64(config, rdb)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if response.Success == false {
+		if strings.Contains(response.Error, "暂不可用") {
+			c.JSON(http.StatusServiceUnavailable, response)
+		} else {
+			c.JSON(http.StatusOK, response)
+		}
+		return
+	}
+
+	// 计算总耗时
+	elapsedTime := time.Since(startTime)
+	log.Printf("itdog测速表格截图(Base64)完成: %s, 耗时: %v", domain, elapsedTime)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// ItdogIPBase64Screenshot 返回Base64编码的ITDog IP统计截图
+func ItdogIPBase64Screenshot(c *gin.Context, rdb *redis.Client) {
+	domain := c.Param("domain")
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "域名参数必填",
+		})
+		return
+	}
+
+	// 记录开始时间，用于计算耗时
+	startTime := time.Now()
+
+	// 检查域名格式
+	if !strings.Contains(domain, ".") {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "无效的域名格式",
+		})
+		return
+	}
+
+	// 配置截图参数
+	config := ITDogScreenshotConfig{
+		Domain:      domain,
+		CacheKey:    fmt.Sprintf("itdog_ip_screenshot_base64:%s", domain),
+		FileName:    fmt.Sprintf("itdog_ip_%s_%d.png", domain, time.Now().Unix()),
+		FileURL:     fmt.Sprintf("/static/itdog/itdog_ip_%s_%d.png", domain, time.Now().Unix()),
+		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_ip_%s_%d.png", domain, time.Now().Unix())),
+		Selector:    `//div[contains(@class, "card") and contains(@class, "mb-0")][.//h5[contains(text(), "域名解析统计")]]`,
+		Description: "itdog IP统计截图(Base64)",
+	}
+
+	// 执行截图
+	response, err := performITDogScreenshotBase64(config, rdb)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if response.Success == false {
+		if strings.Contains(response.Error, "暂不可用") {
+			c.JSON(http.StatusServiceUnavailable, response)
+		} else {
+			c.JSON(http.StatusOK, response)
+		}
+		return
+	}
+
+	// 计算总耗时
+	elapsedTime := time.Since(startTime)
+	log.Printf("itdog IP统计截图(Base64)完成: %s, 耗时: %v", domain, elapsedTime)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// ItdogResolveScreenshotBase64 返回Base64编码的ITDog综合测速截图
+func ItdogResolveScreenshotBase64(c *gin.Context, rdb *redis.Client) {
+	domain := c.Param("domain")
+	if domain == "" {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "域名参数必填",
+		})
+		return
+	}
+
+	// 记录开始时间，用于计算耗时
+	startTime := time.Now()
+
+	// 检查域名格式
+	if !strings.Contains(domain, ".") {
+		c.JSON(http.StatusBadRequest, ScreenshotResponse{
+			Success: false,
+			Error:   "无效的域名格式",
+		})
+		return
+	}
+
+	// 配置截图参数
+	config := ITDogScreenshotConfig{
+		Domain:      domain,
+		CacheKey:    fmt.Sprintf("itdog_resolve_screenshot_base64:%s", domain),
+		FileName:    fmt.Sprintf("itdog_resolve_%s_%d.png", domain, time.Now().Unix()),
+		FileURL:     fmt.Sprintf("/static/itdog/itdog_resolve_%s_%d.png", domain, time.Now().Unix()),
+		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_resolve_%s_%d.png", domain, time.Now().Unix())),
+		Selector:    ".dt-responsive.table-responsive",
+		Description: "itdog综合测速截图(Base64)",
+	}
+
+	// 执行截图
+	response, err := performITDogScreenshotBase64(config, rdb)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if response.Success == false {
+		if strings.Contains(response.Error, "暂不可用") {
+			c.JSON(http.StatusServiceUnavailable, response)
+		} else {
+			c.JSON(http.StatusOK, response)
+		}
+		return
+	}
+
+	// 计算总耗时
+	elapsedTime := time.Since(startTime)
+	log.Printf("itdog综合测速截图(Base64)完成: %s, 耗时: %v", domain, elapsedTime)
+
+	c.JSON(http.StatusOK, response)
+}
+
+// performITDogScreenshotBase64 执行ITDog截图的Base64版本
+func performITDogScreenshotBase64(config ITDogScreenshotConfig, rdb *redis.Client) (*ScreenshotResponse, error) {
+	// 检查ITDog测速服务熔断器状态
+	sb := services.GetServiceBreakers()
+	if !sb.ItdogBreaker.AllowRequest() {
+		log.Printf("ITDog测速服务熔断器开启，拒绝请求: %s", config.Domain)
+		return &ScreenshotResponse{
+			Success: false,
+			Error:   "ITDog测速服务暂不可用",
+			Message: "服务过载，请稍后再试",
+		}, nil
+	}
 
 	// 检查缓存
-	cachedData, err := rdb.Get(context.Background(), cacheKey).Result()
+	cachedData, err := rdb.Get(context.Background(), config.CacheKey).Result()
 	if err == nil {
 		// 缓存命中
 		var response ScreenshotResponse
 		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			log.Printf("使用缓存的itdog测速截图(Base64): %s", domain)
+			log.Printf("使用缓存的%s: %s", config.Description, config.Domain)
 			response.FromCache = true
-			c.JSON(http.StatusOK, response)
-			return
+			return &response, nil
 		}
 	}
 
-	// 使用chromedp获取截图
-	log.Printf("开始获取itdog测速截图(Base64): %s", domain)
+	// 使用统一的Chrome管理器获取截图
+	log.Printf("开始获取%s (统一浏览器): %s", config.Description, config.Domain)
 
-	// 创建上下文
-	ctx, cancel := chromedp.NewContext(
-		context.Background(),
-		chromedp.WithLogf(log.Printf),
-	)
-	defer cancel()
-
-	// 设置超时
-	ctx, cancel = context.WithTimeout(ctx, 90*time.Second)
-	defer cancel()
-
-	// 截图数据
 	var buf []byte
 
 	// 执行截图
-	err = chromedp.Run(ctx,
-		// 导航到itdog测速页面
-		chromedp.Navigate(fmt.Sprintf("https://www.itdog.cn/ping/%s", domain)),
+	err = sb.ItdogBreaker.Execute(func() error {
+		// 获取全局Chrome工具
+		chromeUtil := utils.GetGlobalChromeUtil()
+		if chromeUtil == nil {
+			return fmt.Errorf("Chrome工具未初始化")
+		}
 
-		// 等待"单次测试"按钮出现
-		chromedp.WaitVisible(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery),
+		// 增加重试机制
+		maxRetries := 2
+		for retry := 0; retry <= maxRetries; retry++ {
+			if retry > 0 {
+				log.Printf("[CHROME-UTIL] %s重试第 %d 次", config.Description, retry)
+				time.Sleep(time.Duration(retry) * 2 * time.Second) // 递增等待时间
+			}
 
-		// 点击"单次测试"按钮
-		chromedp.Click(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery),
+			// 从Chrome工具获取上下文，设置120秒超时（增加超时时间）
+			ctx, cancel, chromeErr := chromeUtil.GetContext(120 * time.Second)
+			if chromeErr != nil {
+				log.Printf("[CHROME-UTIL] 获取Chrome上下文失败 (重试 %d/%d): %v", retry, maxRetries, chromeErr)
+				if retry == maxRetries {
+					return fmt.Errorf("获取Chrome上下文失败: %v", chromeErr)
+				}
+				continue
+			}
 
-		// 等待测试完成 - 通过检查进度条
-		chromedp.Sleep(2*time.Second), // 先等待2秒让测试开始
+			// 检查上下文初始状态
+			select {
+			case <-ctx.Done():
+				cancel()
+				log.Printf("[CHROME-UTIL] 上下文在使用前已被取消 (重试 %d/%d)", retry, maxRetries)
+				if retry == maxRetries {
+					return fmt.Errorf("上下文在使用前已被取消")
+				}
+				continue
+			default:
+			}
 
-		// 使用循环检查进度条，最多等待45秒
-		func() chromedp.Action {
-			return chromedp.ActionFunc(func(ctx context.Context) error {
-				var isDone bool
-				var attempts int
-				for attempts < 45 { // 最多尝试45次，每次等待1秒
-					// 执行JavaScript检查进度
-					err := chromedp.Evaluate(`(() => {
-						const progressBar = document.querySelector('.progress-bar');
-						const nodeNum = document.querySelector('#check_node_num');
-						if (!progressBar || !nodeNum) return false;
-						
-						// 获取当前进度值和总节点数
-						const current = parseInt(progressBar.getAttribute('aria-valuenow') || '0');
-						const total = parseInt(nodeNum.textContent || '0');
-						
-						// 确保进度值有效且达到总数
-						return total > 0 && current === total;
-					})()`, &isDone).Do(ctx)
+			log.Printf("[CHROME-UTIL] 开始执行%s操作，域名: %s (重试 %d/%d)", config.Description, config.Domain, retry, maxRetries)
 
-					if err != nil {
-						return err
-					}
+			// 截图数据
+			var buf []byte
 
-					if isDone {
-						return nil // 测试完成，退出循环
-					}
-
-					// 等待1秒后再次检查
+			// 执行截图操作
+			err := chromedp.Run(ctx,
+				// 导航到itdog测速页面
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					// 检查上下文状态
 					select {
 					case <-ctx.Done():
 						return ctx.Err()
-					case <-time.After(1 * time.Second):
-						attempts++
+					default:
 					}
+					log.Printf("[CHROME-UTIL] 步骤1: 导航到ITDog页面: %s", fmt.Sprintf("https://www.itdog.cn/ping/%s", config.Domain))
+					return chromedp.Navigate(fmt.Sprintf("https://www.itdog.cn/ping/%s", config.Domain)).Do(ctx)
+				}),
+
+				// 等待页面加载
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤2: 等待页面加载完成")
+					return chromedp.Sleep(2 * time.Second).Do(ctx)
+				}),
+
+				// 等待"单次测试"按钮出现，增加超时时间
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤3: 等待单次测试按钮出现")
+					return chromedp.WaitVisible(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery).Do(ctx)
+				}),
+
+				// 点击"单次测试"按钮
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤4: 点击单次测试按钮")
+					return chromedp.Click(".btn.btn-primary.ml-3.mb-3", chromedp.ByQuery).Do(ctx)
+				}),
+
+				// 等待测试开始
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤5: 等待测试开始")
+					return chromedp.Sleep(3 * time.Second).Do(ctx)
+				}),
+
+				// 使用循环检查进度条，最多等待60秒（增加等待时间）
+				func() chromedp.Action {
+					return chromedp.ActionFunc(func(ctx context.Context) error {
+						var isDone bool
+						var attempts int
+						maxAttempts := 60 // 增加最大尝试次数
+
+						log.Printf("[CHROME-UTIL] 步骤6: 开始检查%s测试进度", config.Description)
+
+						for attempts < maxAttempts {
+							// 检查上下文是否已取消
+							select {
+							case <-ctx.Done():
+								log.Printf("[CHROME-UTIL] %s上下文已取消，停止等待", config.Description)
+								return ctx.Err()
+							default:
+							}
+
+							// 执行JavaScript检查进度
+							err := chromedp.Evaluate(`(() => {
+								const progressBar = document.querySelector('.progress-bar');
+								const nodeNum = document.querySelector('#check_node_num');
+								if (!progressBar || !nodeNum) return false;
+								
+								// 获取当前进度值和总节点数
+								const current = parseInt(progressBar.getAttribute('aria-valuenow') || '0');
+								const total = parseInt(nodeNum.textContent || '0');
+								
+								// 确保进度值有效且达到总数
+								return total > 0 && current === total;
+							})()`, &isDone).Do(ctx)
+
+							if err != nil {
+								log.Printf("[CHROME-UTIL] %s进度检查出错: %v", config.Description, err)
+								return err
+							}
+
+							if isDone {
+								log.Printf("[CHROME-UTIL] %s测试完成，进度: %d/%d", config.Description, attempts, maxAttempts)
+								return nil // 测试完成，退出循环
+							}
+
+							// 每5次尝试打印一次进度
+							if attempts%5 == 0 && attempts > 0 {
+								log.Printf("[CHROME-UTIL] %s等待测试完成，已等待 %d 秒", config.Description, attempts)
+							}
+
+							// 等待1秒后再次检查
+							select {
+							case <-ctx.Done():
+								return ctx.Err()
+							case <-time.After(1 * time.Second):
+								attempts++
+							}
+						}
+
+						log.Printf("[CHROME-UTIL] %s等待超时，已尝试 %d 次", config.Description, attempts)
+						return nil // 达到最大尝试次数，继续执行
+					})
+				}(),
+
+				// 额外等待一段时间确保页面元素更新
+				chromedp.ActionFunc(func(ctx context.Context) error {
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					default:
+					}
+					log.Printf("[CHROME-UTIL] 步骤7: 等待页面元素更新")
+					return chromedp.Sleep(5 * time.Second).Do(ctx)
+				}),
+
+				// 截取指定元素 - 检查是否是XPath选择器
+				func() chromedp.Action {
+					return chromedp.ActionFunc(func(ctx context.Context) error {
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						default:
+						}
+						log.Printf("[CHROME-UTIL] 步骤8: 开始截图")
+						if strings.HasPrefix(config.Selector, "//") {
+							// 使用XPath选择器
+							log.Printf("[CHROME-UTIL] 使用XPath选择器截图: %s", config.Selector)
+							return chromedp.Screenshot(config.Selector, &buf, chromedp.NodeVisible, chromedp.BySearch).Do(ctx)
+						} else {
+							// 使用CSS选择器
+							log.Printf("[CHROME-UTIL] 使用CSS选择器截图: %s", config.Selector)
+							return chromedp.Screenshot(config.Selector, &buf, chromedp.NodeVisible, chromedp.ByQuery).Do(ctx)
+						}
+					})
+				}(),
+			)
+
+			// 清理资源
+			cancel()
+
+			if err != nil {
+				log.Printf("[CHROME-UTIL] %s失败 (重试 %d/%d): %v", config.Description, retry, maxRetries, err)
+				if strings.Contains(err.Error(), "context canceled") && retry < maxRetries {
+					continue // 重试
 				}
-				return nil // 达到最大尝试次数，继续执行
-			})
-		}(),
+				if retry == maxRetries {
+					return err
+				}
+				continue
+			}
 
-		// 额外等待一段时间确保地图更新
-		chromedp.Sleep(3*time.Second),
+			log.Printf("[CHROME-UTIL] %s截图成功，大小: %d bytes", config.Description, len(buf))
 
-		// 截取中国地图元素
-		chromedp.Screenshot("#china_map", &buf, chromedp.NodeVisible, chromedp.ByQuery),
-	)
+			// 保存截图
+			if err := os.WriteFile(config.FilePath, buf, 0644); err != nil {
+				log.Printf("保存%s失败: %v", config.Description, err)
+				return err
+			}
+
+			return nil // 成功完成
+		}
+
+		return fmt.Errorf("重试次数耗尽")
+	})
 
 	if err != nil {
-		log.Printf("itdog测速截图(Base64)失败: %v", err)
+		log.Printf("%s失败: %v", config.Description, err)
+
+		// 检查是否是服务熔断器开启的错误
+		if err.Error() == "circuit open" {
+			return &ScreenshotResponse{
+				Success: false,
+				Error:   "ITDog测速服务暂不可用",
+				Message: "服务过载，请稍后再试",
+			}, nil
+		}
 
 		// 检查是否是网站无法访问的错误
 		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
@@ -926,12 +1635,11 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 			strings.Contains(err.Error(), "context deadline exceeded") ||
 			strings.Contains(err.Error(), "TLS handshake timeout") {
 			// 返回特定的错误信息，指示itdog网站无法访问
-			c.JSON(http.StatusOK, ScreenshotResponse{
+			return &ScreenshotResponse{
 				Success: false,
-				Error:   "itdog测速网站无法访问",
-				Message: fmt.Sprintf("无法连接到itdog测速网站: %s", domain),
-			})
-			return
+				Error:   "ITDog测速网站无法访问",
+				Message: fmt.Sprintf("无法连接到ITDog测速网站: %s", config.Domain),
+			}, nil
 		}
 
 		// 检查是否是元素未找到的错误
@@ -939,20 +1647,18 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 			strings.Contains(err.Error(), "not found") ||
 			strings.Contains(err.Error(), "not visible") {
 			// 返回特定的错误信息，指示元素未找到
-			c.JSON(http.StatusOK, ScreenshotResponse{
+			return &ScreenshotResponse{
 				Success: false,
-				Error:   "无法获取测速地图",
-				Message: fmt.Sprintf("无法在itdog网站上找到测速地图元素，域名: %s", domain),
-			})
-			return
+				Error:   "无法获取测速内容",
+				Message: fmt.Sprintf("无法在itdog网站上找到%s元素，域名: %s", config.Description, config.Domain),
+			}, nil
 		}
 
 		// 其他类型的错误
-		c.JSON(http.StatusOK, ScreenshotResponse{
+		return &ScreenshotResponse{
 			Success: false,
-			Error:   fmt.Sprintf("itdog测速截图失败: %v", err),
-		})
-		return
+			Error:   fmt.Sprintf("%s操作失败: %v", config.Description, err),
+		}, nil
 	}
 
 	// 转换为Base64
@@ -960,20 +1666,101 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	dataURI := fmt.Sprintf("data:image/png;base64,%s", base64Data)
 
 	// 构建响应
-	response := ScreenshotResponse{
-		Success:   true,
-		ImageUrl:  dataURI,
-		FromCache: false,
+	response := &ScreenshotResponse{
+		Success:     true,
+		ImageUrl:    dataURI,
+		ImageBase64: base64Data,
+		FromCache:   false,
 	}
 
-	// 缓存响应
+	// 缓存结果 (12小时)
 	if responseJSON, err := json.Marshal(response); err == nil {
-		rdb.Set(context.Background(), cacheKey, responseJSON, screenshotCacheDuration)
+		rdb.Set(context.Background(), config.CacheKey, responseJSON, 12*time.Hour)
 	}
 
-	// 计算耗时
-	duration := time.Since(startTime).Milliseconds()
-	log.Printf("itdog测速截图(Base64)完成: %s, 耗时: %dms", domain, duration)
+	log.Printf("%s完成: %s", config.Description, config.Domain)
+	return response, nil
+}
 
-	c.JSON(http.StatusOK, response)
+// ChromeStatus 检查Chrome工具状态的API
+func ChromeStatus(c *gin.Context) {
+	chromeUtil := utils.GetGlobalChromeUtil()
+	if chromeUtil == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Chrome工具未初始化",
+		})
+		return
+	}
+
+	// 获取详细状态信息
+	detailedStats := chromeUtil.GetDetailedStats()
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":       true,
+		"chrome_status": detailedStats,
+		"message":       "Chrome工具详细状态检查完成",
+	})
+}
+
+// ChromeDiagnose 执行Chrome诊断的API
+func ChromeDiagnose(c *gin.Context) {
+	chromeUtil := utils.GetGlobalChromeUtil()
+	if chromeUtil == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Chrome工具未初始化",
+		})
+		return
+	}
+
+	// 执行诊断
+	diagnosis := chromeUtil.Diagnose()
+
+	// 根据诊断结果返回适当的HTTP状态码
+	severity, _ := diagnosis["severity"].(string)
+	var httpStatus int
+	switch severity {
+	case "critical":
+		httpStatus = http.StatusInternalServerError
+	case "high":
+		httpStatus = http.StatusServiceUnavailable
+	case "medium":
+		httpStatus = http.StatusAccepted
+	default:
+		httpStatus = http.StatusOK
+	}
+
+	c.JSON(httpStatus, gin.H{
+		"success":   severity == "none" || severity == "medium",
+		"diagnosis": diagnosis,
+		"message":   "Chrome诊断完成",
+	})
+}
+
+// ChromeForceReset 强制重置Chrome的API
+func ChromeForceReset(c *gin.Context) {
+	chromeUtil := utils.GetGlobalChromeUtil()
+	if chromeUtil == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   "Chrome工具未初始化",
+		})
+		return
+	}
+
+	// 执行强制重置
+	err := chromeUtil.ForceReset()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"error":   fmt.Sprintf("Chrome强制重置失败: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Chrome强制重置成功",
+	})
 }

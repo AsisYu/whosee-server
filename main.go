@@ -2,6 +2,11 @@ package main
 
 import (
 	"context"
+	"dmainwhoseek/middleware"
+	"dmainwhoseek/providers"
+	"dmainwhoseek/routes"
+	"dmainwhoseek/services"
+	"dmainwhoseek/utils"
 	"fmt"
 	"io"
 	"log"
@@ -12,11 +17,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"dmainwhoseek/middleware"
-	"dmainwhoseek/providers"
-	"dmainwhoseek/routes"
-	"dmainwhoseek/services"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -163,6 +163,21 @@ func main() {
 	// 初始化健康检查器
 	serviceContainer.InitializeHealthChecker()
 
+	// 初始化全局Chrome工具
+	log.Println("正在初始化Chrome工具...")
+	if err := utils.InitGlobalChromeUtil(); err != nil {
+		log.Fatalf("Chrome工具初始化失败: %v", err)
+	}
+	log.Println("Chrome工具初始化成功")
+
+	// 启动Chrome健康检查（暂时保留兼容性）
+	chromeUtil := utils.GetGlobalChromeUtil()
+	if chromeUtil != nil {
+		log.Println("Chrome工具已就绪，可用于截图服务")
+		// 启动健康监控
+		chromeUtil.StartHealthMonitor()
+	}
+
 	// 创建Gin引擎
 	r := gin.Default()
 
@@ -205,6 +220,14 @@ func main() {
 
 		// 关闭服务容器
 		serviceContainer.Shutdown()
+
+		// 停止Chrome工具
+		chromeUtil := utils.GetGlobalChromeUtil()
+		if chromeUtil != nil {
+			log.Println("正在停止Chrome工具...")
+			chromeUtil.Stop()
+			log.Println("Chrome工具已停止")
+		}
 
 		// 设置关闭超时上下文
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

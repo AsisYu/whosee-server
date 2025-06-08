@@ -87,18 +87,18 @@ func ScreenshotBase64Handler(c *gin.Context) {
 
 	// 完整URL
 	url := fmt.Sprintf("https://%s", domainStr)
-	
+
 	// 创建上下文
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
-	
+
 	// 设置超时
 	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	// 截图数据
 	var buf []byte
-	
+
 	// 执行截图
 	log.Printf("[SCREENSHOT-BASE64] 域名: %s | 开始截图", domainStr)
 	err = chromedp.Run(ctx,
@@ -110,11 +110,11 @@ func ScreenshotBase64Handler(c *gin.Context) {
 	if err != nil {
 		// 计算处理时间
 		processingTime := time.Since(startTime).Milliseconds()
-		
+
 		// 检查是否是网站无法访问的错误
 		var errorResponse ScreenshotResponse
 		var errorType string
-		
+
 		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
 			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
 			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
@@ -135,25 +135,25 @@ func ScreenshotBase64Handler(c *gin.Context) {
 			}
 			errorType = "截图失败"
 		}
-		
-		log.Printf("[SCREENSHOT-BASE64] 域名: %s | 错误: %s | 耗时: %dms | 详情: %v", 
+
+		log.Printf("[SCREENSHOT-BASE64] 域名: %s | 错误: %s | 耗时: %dms | 详情: %v",
 			domainStr, errorType, processingTime, err)
-		
+
 		c.JSON(http.StatusOK, errorResponse)
 		return
 	}
-	
+
 	// 转换为Base64
 	base64Data := base64.StdEncoding.EncodeToString(buf)
 	dataURI := fmt.Sprintf("data:image/png;base64,%s", base64Data)
-	
+
 	// 构建响应
 	response := ScreenshotResponse{
 		Success:   true,
 		ImageUrl:  dataURI,
 		FromCache: false,
 	}
-	
+
 	// 缓存响应
 	if responseJSON, err := json.Marshal(response); err == nil {
 		redisClientPtr.Set(context.Background(), cacheKey, responseJSON, 12*time.Hour)
@@ -162,7 +162,7 @@ func ScreenshotBase64Handler(c *gin.Context) {
 	// 计算处理时间
 	processingTime := time.Since(startTime).Milliseconds()
 	log.Printf("[SCREENSHOT-BASE64] 域名: %s | 成功 | 耗时: %dms", domainStr, processingTime)
-	
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -234,14 +234,14 @@ func ITDogBase64Handler(c *gin.Context) {
 	// 完整URL
 	ctx, cancel := chromedp.NewContext(context.Background())
 	defer cancel()
-	
+
 	// 设置超时
 	ctx, cancel = context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
 	// 截图数据
 	var buf []byte
-	
+
 	// 执行截图
 	log.Printf("[ITDOG-BASE64] 域名: %s | 开始截图", domainStr)
 	err = chromedp.Run(ctx,
@@ -307,11 +307,11 @@ func ITDogBase64Handler(c *gin.Context) {
 	if err != nil {
 		// 计算处理时间
 		processingTime := time.Since(startTime).Milliseconds()
-		
+
 		// 检查错误类型
 		var errorResponse ScreenshotResponse
 		var errorType string
-		
+
 		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
 			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
 			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
@@ -344,25 +344,25 @@ func ITDogBase64Handler(c *gin.Context) {
 			}
 			errorType = "截图失败"
 		}
-		
-		log.Printf("[ITDOG-BASE64] 域名: %s | 错误: %s | 耗时: %dms | 详情: %v", 
+
+		log.Printf("[ITDOG-BASE64] 域名: %s | 错误: %s | 耗时: %dms | 详情: %v",
 			domainStr, errorType, processingTime, err)
-		
+
 		c.JSON(http.StatusOK, errorResponse)
 		return
 	}
-	
+
 	// 转换为Base64
 	base64Data := base64.StdEncoding.EncodeToString(buf)
 	dataURI := fmt.Sprintf("data:image/png;base64,%s", base64Data)
-	
+
 	// 构建响应
 	response := ScreenshotResponse{
 		Success:   true,
 		ImageUrl:  dataURI,
 		FromCache: false,
 	}
-	
+
 	// 缓存响应
 	if responseJSON, err := json.Marshal(response); err == nil {
 		redisClientPtr.Set(context.Background(), cacheKey, responseJSON, 12*time.Hour)
@@ -371,6 +371,174 @@ func ITDogBase64Handler(c *gin.Context) {
 	// 计算处理时间
 	processingTime := time.Since(startTime).Milliseconds()
 	log.Printf("[ITDOG-BASE64] 域名: %s | 成功 | 耗时: %dms", domainStr, processingTime)
-	
+
 	c.JSON(http.StatusOK, response)
+}
+
+// ITDogTableHandler ITDog表格测速截图处理程序
+func ITDogTableHandler(c *gin.Context) {
+	// 从上下文获取Redis客户端
+	redisClient, exists := c.Get("redis")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "无法获取Redis客户端",
+		})
+		return
+	}
+
+	// 类型断言
+	redisClientPtr, ok := redisClient.(*redis.Client)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "Redis客户端类型错误",
+		})
+		return
+	}
+
+	// 调用核心实现函数
+	ItdogTableScreenshot(c, redisClientPtr)
+}
+
+// ITDogTableBase64Handler ITDog表格测速Base64编码截图处理程序
+func ITDogTableBase64Handler(c *gin.Context) {
+	// 从上下文获取Redis客户端
+	redisClient, exists := c.Get("redis")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "无法获取Redis客户端",
+		})
+		return
+	}
+
+	// 类型断言
+	redisClientPtr, ok := redisClient.(*redis.Client)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "Redis客户端类型错误",
+		})
+		return
+	}
+
+	// 调用核心实现函数
+	ItdogTableScreenshotBase64(c, redisClientPtr)
+}
+
+// ITDogIPHandler ITDog IP统计测速截图处理程序
+func ITDogIPHandler(c *gin.Context) {
+	// 从上下文获取Redis客户端
+	redisClient, exists := c.Get("redis")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "无法获取Redis客户端",
+		})
+		return
+	}
+
+	// 类型断言
+	redisClientPtr, ok := redisClient.(*redis.Client)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "Redis客户端类型错误",
+		})
+		return
+	}
+
+	// 调用核心实现函数
+	ItdogIPScreenshot(c, redisClientPtr)
+}
+
+// ITDogIPBase64Handler ITDog IP统计测速Base64编码截图处理程序
+func ITDogIPBase64Handler(c *gin.Context) {
+	// 从上下文获取Redis客户端
+	redisClient, exists := c.Get("redis")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "无法获取Redis客户端",
+		})
+		return
+	}
+
+	// 类型断言
+	redisClientPtr, ok := redisClient.(*redis.Client)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "Redis客户端类型错误",
+		})
+		return
+	}
+
+	// 调用核心实现函数
+	ItdogIPBase64Screenshot(c, redisClientPtr)
+}
+
+// ITDogResolveHandler ITDog综合测速截图处理程序
+func ITDogResolveHandler(c *gin.Context) {
+	// 从上下文获取Redis客户端
+	redisClient, exists := c.Get("redis")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "无法获取Redis客户端",
+		})
+		return
+	}
+
+	// 类型断言
+	redisClientPtr, ok := redisClient.(*redis.Client)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "Redis客户端类型错误",
+		})
+		return
+	}
+
+	// 调用核心实现函数
+	ItdogResolveScreenshot(c, redisClientPtr)
+}
+
+// ITDogResolveBase64Handler ITDog综合测速Base64编码截图处理程序
+func ITDogResolveBase64Handler(c *gin.Context) {
+	// 从上下文获取Redis客户端
+	redisClient, exists := c.Get("redis")
+	if !exists {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "无法获取Redis客户端",
+		})
+		return
+	}
+
+	// 类型断言
+	redisClientPtr, ok := redisClient.(*redis.Client)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
+			Success: false,
+			Error:   "内部服务器错误",
+			Message: "Redis客户端类型错误",
+		})
+		return
+	}
+
+	// 调用核心实现函数
+	ItdogResolveScreenshotBase64(c, redisClientPtr)
 }

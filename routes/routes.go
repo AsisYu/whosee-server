@@ -104,7 +104,7 @@ func asyncWorkerMiddleware(workerPool *services.WorkerPool, timeout time.Duratio
 
 		// 检查通道是否在处理函数中使用
 		channelUsed, exists := c.Get("channelUsed")
-		
+
 		// 如果通道未被使用或明确设置为未使用，则关闭并清理资源
 		if !exists || channelUsed == false {
 			cancel()
@@ -127,37 +127,37 @@ func RegisterAPIRoutes(r *gin.Engine, serviceContainer *services.ServiceContaine
 
 	apiLimiter := serviceContainer.Limiter
 	apiv1 := r.Group("/api/v1")
-	
+
 	// 健康检查路由
 	r.GET("/api/health", handlers.HealthCheckHandler(serviceContainer.HealthChecker))
-	
+
 	// 认证令牌路由 - 用于客户端获取JWT令牌
 	r.POST("/api/auth/token", middleware.GenerateToken(serviceContainer.RedisClient))
-	
+
 	// 应用安全中间件
 	if os.Getenv("DISABLE_API_SECURITY") != "true" {
 		// 配置IP白名单中间件
 		config := middleware.IPWhitelistConfig{
-			APIKey:         os.Getenv("API_KEY"),
-			APIDevMode:     os.Getenv("API_DEV_MODE") == "true",
-			TrustedIPs:     os.Getenv("TRUSTED_IPS"),
-			RedisClient:    serviceContainer.RedisClient,
-			StrictMode:     true,
+			APIKey:          os.Getenv("API_KEY"),
+			APIDevMode:      os.Getenv("API_DEV_MODE") == "true",
+			TrustedIPs:      os.Getenv("TRUSTED_IPS"),
+			RedisClient:     serviceContainer.RedisClient,
+			StrictMode:      true,
 			TrustedIPsList:  []string{"127.0.0.1", "::1"},
 			CacheExpiration: 5 * time.Minute,
 		}
-		
+
 		// 应用IP白名单中间件
 		apiv1.Use(middleware.IPWhitelistWithConfig(config))
-		
+
 		// 应用CORS中间件
 		corsConfig := middleware.DefaultCORSConfig()
 		r.Use(middleware.CORSWithConfig(corsConfig))
-		
+
 		// 应用安全头部中间件
 		securityConfig := middleware.DefaultSecurityConfig()
 		r.Use(middleware.SecurityWithConfig(securityConfig))
-		
+
 		// 应用限流中间件
 		rateLimitConfig := middleware.DefaultRateLimitConfig()
 		rateLimitConfig.RedisClient = serviceContainer.RedisClient
@@ -169,8 +169,8 @@ func RegisterAPIRoutes(r *gin.Engine, serviceContainer *services.ServiceContaine
 	// 添加请求大小限制，对不同类型请求启用不同的限制
 	// 使用可配置的SizeLimitWithConfig中间件，允许10MB的大请求体
 	apiv1.Use(middleware.SizeLimitWithConfig(middleware.SizeLimitConfig{
-		Limit: 10 * 1024 * 1024, // 限制请求体大小为10MB
-		Message: "请求体超过最大限制",
+		Limit:      10 * 1024 * 1024, // 限制请求体大小为10MB
+		Message:    "请求体超过最大限制",
 		StatusCode: 413,
 		// 添加跳过路径函数，排除某些路径的大小限制检查
 		SkipPathFunc: func(path string) bool {
@@ -221,27 +221,37 @@ func RegisterAPIRoutes(r *gin.Engine, serviceContainer *services.ServiceContaine
 	itdogBase64Group.Use(domainValidationMiddleware())
 	itdogBase64Group.Use(rateLimitMiddleware(apiLimiter))
 	itdogBase64Group.GET("/:domain", handlers.ITDogBase64Handler)
-	
-	// 注意：保留下面的两个新端点的注册，但暂时注释掉，直到实现相应的处理程序
-	/* 
+
 	// ITDog表格截图路由
 	itdogTableGroup := apiv1.Group("/itdog/table")
 	itdogTableGroup.Use(domainValidationMiddleware())
+	itdogTableGroup.Use(rateLimitMiddleware(apiLimiter))
 	itdogTableGroup.GET("/:domain", handlers.ITDogTableHandler)
 
-	// ITDog解析截图路由 
-	itdogResolveGroup := apiv1.Group("/itdog/resolve")
-	itdogResolveGroup.Use(domainValidationMiddleware())
-	itdogResolveGroup.GET("/:domain", handlers.ITDogResolveHandler) 
-	
+	// ITDog IP统计截图路由
+	itdogIPGroup := apiv1.Group("/itdog/ip")
+	itdogIPGroup.Use(domainValidationMiddleware())
+	itdogIPGroup.Use(rateLimitMiddleware(apiLimiter))
+	itdogIPGroup.GET("/:domain", handlers.ITDogIPHandler)
+
+	// ITDog IP统计截图Base64路由
+	itdogIPBase64Group := apiv1.Group("/itdog/ip/base64")
+	itdogIPBase64Group.Use(domainValidationMiddleware())
+	itdogIPBase64Group.GET("/:domain", handlers.ITDogIPBase64Handler)
+
 	// ITDog表格截图Base64路由
 	itdogTableBase64Group := apiv1.Group("/itdog/table/base64")
 	itdogTableBase64Group.Use(domainValidationMiddleware())
 	itdogTableBase64Group.GET("/:domain", handlers.ITDogTableBase64Handler)
 
-	// ITDog解析截图Base64路由
+	// ITDog全国解析截图路由
+	itdogResolveGroup := apiv1.Group("/itdog/resolve")
+	itdogResolveGroup.Use(domainValidationMiddleware())
+	itdogResolveGroup.GET("/:domain", handlers.ITDogResolveHandler)
+
+	// ITDog全国解析截图Base64路由
 	itdogResolveBase64Group := apiv1.Group("/itdog/resolve/base64")
 	itdogResolveBase64Group.Use(domainValidationMiddleware())
 	itdogResolveBase64Group.GET("/:domain", handlers.ITDogResolveBase64Handler)
-	*/
+
 }
