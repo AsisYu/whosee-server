@@ -625,3 +625,99 @@ func (m *WhoisManager) GetOverallStatus() string {
 		return "up"
 	}
 }
+
+// QueryWithProvider 使用指定提供商查询域名信息
+func (m *WhoisManager) QueryWithProvider(domain string, providerName string) (*types.WhoisResponse, error, bool) {
+	// 创建一个空的WhoisResponse用于错误情况下返回
+	emptyResponse := &types.WhoisResponse{
+		Domain:         domain,
+		StatusMessage:  "查询失败",
+		SourceProvider: providerName,
+	}
+
+	// 从缓存中检查
+	log.Printf("开始检查缓存: %s (提供商: %s)", domain, providerName)
+	cacheKey := CACHE_PREFIX + domain + ":" + providerName
+	cachedResponse, found := m.checkCache(cacheKey)
+	if found {
+		log.Printf("命中缓存: %s (提供商: %s)", domain, providerName)
+		return cachedResponse, nil, true
+	}
+
+	// 查找指定的提供商
+	var targetProvider WhoisProvider
+	m.mu.RLock()
+	for _, p := range m.providers {
+		if p.Name() == providerName {
+			targetProvider = p
+			break
+		}
+	}
+	m.mu.RUnlock()
+
+	if targetProvider == nil {
+		emptyResponse.StatusCode = StatusProviderError
+		emptyResponse.StatusMessage = fmt.Sprintf("提供商 '%s' 不存在", providerName)
+		return emptyResponse, fmt.Errorf("提供商 '%s' 不存在", providerName), false
+	}
+
+	// 检查提供商是否可用
+	m.mu.RLock()
+	status := m.status[providerName]
+	m.mu.RUnlock()
+
+	if !status.isAvailable {
+		emptyResponse.StatusCode = StatusProviderError
+		emptyResponse.StatusMessage = fmt.Sprintf("提供商 '%s' 当前不可用", providerName)
+		return emptyResponse, fmt.Errorf("提供商 '%s' 当前不可用", providerName), false
+	}
+
+	log.Printf("使用指定提供商查询: %s, 域名: %s", providerName, domain)
+
+	// 创建上下文，用于控制查询超时时间
+	var timeout time.Duration = 15 * time.Second
+	// 检查是否是已知的慢域名
+	slowDomains := []string{"byd.com", "outlook.com", "microsoft.com", "alibaba.com", "tencent.com"}
+	for _, slowDomain := range slowDomains {
+		if strings.Contains(domain, slowDomain) {
+			timeout = 30 * time.Second
+			log.Printf("检测到已知的慢域名: %s，增加超时时间至 %v", domain, timeout)
+			break
+		}
+	}
+
+	// 执行查询
+	response, err, cached := m.queryWithTimeout(targetProvider, domain, timeout)
+
+	if err != nil {
+		log.Printf("提供商 %s 查询域名 %s 失败: %v", providerName, domain, err)
+		// 更新提供商状态
+		m.mu.Lock()
+		status.errorCount++
+		status.lastUsed = time.Now().UTC()
+		if status.errorCount >= 3 {
+			status.isAvailable = false
+			log.Printf("提供商 %s 连续失败，暂时禁用", providerName)
+		}
+		m.mu.Unlock()
+
+		emptyResponse.StatusCode = StatusServerError
+		emptyResponse.StatusMessage = fmt.Sprintf("提供商 '%s' 查询失败: %s", providerName, err.Error())
+		return emptyResponse, err, false
+	}
+
+	// 更新提供商状态
+	m.mu.Lock()
+	status.count++
+	status.lastUsed = time.Now().UTC()
+	status.errorCount = 0 // 重置错误计数
+	m.mu.Unlock()
+
+	if !cached {
+		log.Printf("提供商 %s 查询域名 %s 成功，缓存结果", providerName, domain)
+		// 缓存结果（使用提供商特定的缓存键）
+		m.cacheResponse(cacheKey, response)
+	}
+
+	return response, nil, cached
+}

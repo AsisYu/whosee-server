@@ -1,0 +1,38 @@
+# Chrome自动下载目录
+chrome_runtime/
+
+# 可执行文件
+*.exe
+main
+whosee-whois
+
+# 日志文件
+*.log
+logs/
+
+# 配置文件
+.env
+.env.local
+
+# 临时文件
+*.tmp
+*.temp
+
+# 静态资源
+static/screenshots/*
+static/itdog/*
+
+# IDE和编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+# Go相关
+vendor/
+*.test
+*.prof 

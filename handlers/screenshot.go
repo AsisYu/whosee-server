@@ -1512,17 +1512,17 @@ func performITDogScreenshotBase64(config ITDogScreenshotConfig, rdb *redis.Clien
 
 							// 执行JavaScript检查进度
 							err := chromedp.Evaluate(`(() => {
-								const progressBar = document.querySelector('.progress-bar');
-								const nodeNum = document.querySelector('#check_node_num');
-								if (!progressBar || !nodeNum) return false;
-								
-								// 获取当前进度值和总节点数
-								const current = parseInt(progressBar.getAttribute('aria-valuenow') || '0');
-								const total = parseInt(nodeNum.textContent || '0');
-								
-								// 确保进度值有效且达到总数
-								return total > 0 && current === total;
-							})()`, &isDone).Do(ctx)
+							const progressBar = document.querySelector('.progress-bar');
+							const nodeNum = document.querySelector('#check_node_num');
+							if (!progressBar || !nodeNum) return false;
+							
+							// 获取当前进度值和总节点数
+							const current = parseInt(progressBar.getAttribute('aria-valuenow') || '0');
+							const total = parseInt(nodeNum.textContent || '0');
+							
+							// 确保进度值有效且达到总数
+							return total > 0 && current === total;
+						})()`, &isDone).Do(ctx)
 
 							if err != nil {
 								log.Printf("[CHROME-UTIL] %s进度检查出错: %v", config.Description, err)

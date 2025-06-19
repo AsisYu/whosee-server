@@ -349,3 +349,21 @@ func (hc *HealthChecker) UpdateCheckResults(results map[string]interface{}) {
 
 	log.Printf("健康检查结果已更新，时间: %s", hc.lastCheckTime.Format(time.RFC3339))
 }
+
+// GetHealthStatus 获取健康状态 - 用于健康检查API处理程序
+func (hc *HealthChecker) GetHealthStatus() map[string]interface{} {
+	hc.mutex.RLock()
+	defer hc.mutex.RUnlock()
+
+	// 如果缓存的结果中有services字段，直接返回
+	if services, exists := hc.lastCheckResults["services"]; exists {
+		if servicesMap, ok := services.(map[string]interface{}); ok {
+			log.Printf("返回缓存的健康检查服务状态，包含 %d 个服务", len(servicesMap))
+			return servicesMap
+		}
+	}
+
+	// 如果没有services字段，返回整个lastCheckResults作为向后兼容
+	log.Printf("返回完整的健康检查结果作为服务状态")
+	return hc.lastCheckResults
+}

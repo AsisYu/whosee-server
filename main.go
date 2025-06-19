@@ -130,6 +130,16 @@ func main() {
 	setupLogger()
 	log.Printf("启动服务器，版本：%s，环境：%s", os.Getenv("APP_VERSION"), os.Getenv("APP_ENV"))
 
+	// 首先确保Chrome可用 - 在所有其他服务之前
+	log.Println("=== 开始Chrome预检查和下载 ===")
+	chromeDownloader := utils.NewChromeDownloader()
+	if chromeExecPath, err := chromeDownloader.EnsureChrome(); err != nil {
+		log.Printf("Chrome下载失败: %v，将继续使用系统Chrome", err)
+	} else {
+		log.Printf("Chrome已准备就绪: %s", chromeExecPath)
+	}
+	log.Println("=== Chrome预检查完成 ===")
+
 	// 初始化Redis客户端
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
@@ -157,26 +167,37 @@ func main() {
 	// 初始化WHOIS服务提供商并添加到管理器
 	whoisFreaksProvider := providers.NewWhoisFreaksProvider()
 	whoisXMLProvider := providers.NewWhoisXMLProvider()
+	ianaRDAPProvider := providers.NewIANARDAPProvider()
+	ianaWhoisProvider := providers.NewIANAWhoisProvider()
+
 	serviceContainer.WhoisManager.AddProvider(whoisFreaksProvider)
 	serviceContainer.WhoisManager.AddProvider(whoisXMLProvider)
+	serviceContainer.WhoisManager.AddProvider(ianaRDAPProvider)
+	serviceContainer.WhoisManager.AddProvider(ianaWhoisProvider)
 
 	// 初始化健康检查器
 	serviceContainer.InitializeHealthChecker()
 
-	// 初始化全局Chrome工具
-	log.Println("正在初始化Chrome工具...")
-	if err := utils.InitGlobalChromeUtil(); err != nil {
-		log.Fatalf("Chrome工具初始化失败: %v", err)
-	}
-	log.Println("Chrome工具初始化成功")
+	// 异步初始化Chrome工具（完全非阻塞）
+	log.Println("正在后台异步初始化Chrome工具...")
+	go func() {
+		time.Sleep(3 * time.Second) // 延迟3秒启动，避免与主服务启动冲突
 
-	// 启动Chrome健康检查（暂时保留兼容性）
-	chromeUtil := utils.GetGlobalChromeUtil()
-	if chromeUtil != nil {
-		log.Println("Chrome工具已就绪，可用于截图服务")
-		// 启动健康监控
-		chromeUtil.StartHealthMonitor()
-	}
+		log.Println("[CHROME] 开始后台初始化Chrome工具...")
+		if err := utils.InitGlobalChromeUtil(); err != nil {
+			log.Printf("[CHROME] Chrome工具初始化失败: %v，截图功能不可用", err)
+			return
+		}
+
+		log.Println("[CHROME] Chrome工具初始化成功")
+
+		// 启动Chrome健康检查
+		chromeUtil := utils.GetGlobalChromeUtil()
+		if chromeUtil != nil {
+			log.Println("[CHROME] Chrome工具已就绪，启动健康监控")
+			chromeUtil.StartHealthMonitor()
+		}
+	}()
 
 	// 创建Gin引擎
 	r := gin.Default()
@@ -221,12 +242,13 @@ func main() {
 		// 关闭服务容器
 		serviceContainer.Shutdown()
 
-		// 停止Chrome工具
-		chromeUtil := utils.GetGlobalChromeUtil()
-		if chromeUtil != nil {
-			log.Println("正在停止Chrome工具...")
+		// 停止Chrome工具（如果已初始化）
+		if chromeUtil := utils.GetGlobalChromeUtil(); chromeUtil != nil {
+			log.Println("[CHROME] 正在停止Chrome工具...")
 			chromeUtil.Stop()
-			log.Println("Chrome工具已停止")
+			log.Println("[CHROME] Chrome工具已停止")
+		} else {
+			log.Println("[CHROME] Chrome工具未初始化，无需停止")
 		}
 
 		// 设置关闭超时上下文

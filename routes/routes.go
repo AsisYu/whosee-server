@@ -150,6 +150,9 @@ func RegisterAPIRoutes(r *gin.Engine, serviceContainer *services.ServiceContaine
 		// 应用IP白名单中间件
 		apiv1.Use(middleware.IPWhitelistWithConfig(config))
 
+		// 应用JWT认证中间件 - 确保所有API调用都需要有效的JWT令牌
+		apiv1.Use(middleware.AuthRequired(serviceContainer.RedisClient))
+
 		// 应用CORS中间件
 		corsConfig := middleware.DefaultCORSConfig()
 		r.Use(middleware.CORSWithConfig(corsConfig))
@@ -186,6 +189,23 @@ func RegisterAPIRoutes(r *gin.Engine, serviceContainer *services.ServiceContaine
 	whoisGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 15*time.Second))
 	whoisGroup.GET("", handlers.WhoisHandler)
 	whoisGroup.GET("/:domain", handlers.WhoisHandler)
+
+	// WHOIS提供商比较路由
+	whoisCompareGroup := apiv1.Group("/whois/compare")
+	whoisCompareGroup.Use(domainValidationMiddleware())
+	whoisCompareGroup.Use(rateLimitMiddleware(apiLimiter))
+	whoisCompareGroup.GET("/:domain", handlers.WhoisComparisonHandler)
+
+	// WHOIS提供商信息路由
+	apiv1.GET("/whois/providers", handlers.WhoisProvidersInfoHandler)
+
+	// RDAP查询路由
+	rdapGroup := apiv1.Group("/rdap")
+	rdapGroup.Use(domainValidationMiddleware())
+	rdapGroup.Use(rateLimitMiddleware(apiLimiter))
+	rdapGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 15*time.Second))
+	rdapGroup.GET("", handlers.RDAPHandler)
+	rdapGroup.GET("/:domain", handlers.RDAPHandler)
 
 	// DNS查询路由
 	dnsGroup := apiv1.Group("/dns")
