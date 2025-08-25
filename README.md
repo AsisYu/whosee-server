@@ -383,8 +383,7 @@ utils.SetGlobalChromeMode("auto")
 | `HEALTH_CHECK_INTERVAL_DAYS` | 健康检查间隔天数 | `1` |
 | `CHROME_MODE` | Chrome运行模式 | `auto` (可选: `cold`, `warm`, `auto`) |
 
-## 联系方式
 
-如有任何问题或建议，请通过以下方式联系我们：
+## AI 开发工具
 
-- 项目维护者：[AsisYu](https://github.com/AsisYu)
+本项目采用 AI 辅助开发，使用 Trae 和 Cursor 等现代化 AI 工具进行代码生成、架构设计和开发优化，显著提升开发效率和代码质量。
