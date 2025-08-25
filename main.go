@@ -73,10 +73,14 @@ func getPort(defaultPort string) string {
 
 // 从环境变量中读取CORS配置
 func getCorsConfig() cors.Config {
-	// 从环境变量读取CORS允许的源，默认为空数组
-	allowedOrigins := []string{}
-	if origins := os.Getenv("CORS_ALLOWED_ORIGINS"); origins != "" {
+	// 从环境变量读取CORS允许的源，默认为开发环境常用地址
+	allowedOrigins := []string{"http://localhost:3000", "http://localhost:5173", "https://whosee.me"}
+	if origins := os.Getenv("CORS_ORIGINS"); origins != "" {
 		allowedOrigins = strings.Split(origins, ",")
+		// 清理空格
+		for i := range allowedOrigins {
+			allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
+		}
 	}
 
 	// 从环境变量读取CORS允许的方法，默认为标准HTTP方法

@@ -28,7 +28,7 @@ type CORSConfig struct {
 // DefaultCORSConfig 默认的CORS配置
 func DefaultCORSConfig() CORSConfig {
 	// 从环境变量中获取允许的来源域名
-	allowOrigins := []string{"localhost", "127.0.0.1", "https://whosee.me"}
+	allowOrigins := []string{"http://localhost:3000", "http://localhost:5173", "https://whosee.me"}
 	if envOrigins := os.Getenv("CORS_ORIGINS"); envOrigins != "" {
 		allowOrigins = strings.Split(envOrigins, ",")
 		for i := range allowOrigins {
@@ -36,13 +36,31 @@ func DefaultCORSConfig() CORSConfig {
 		}
 	}
 
+	// 从环境变量中获取允许的HTTP方法
+	allowMethods := []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"}
+	if envMethods := os.Getenv("CORS_ALLOWED_METHODS"); envMethods != "" {
+		allowMethods = strings.Split(envMethods, ",")
+		for i := range allowMethods {
+			allowMethods[i] = strings.TrimSpace(allowMethods[i])
+		}
+	}
+
+	// 从环境变量中获取允许的请求头
+	allowHeaders := []string{
+		"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With",
+		"X-API-KEY", "Access-Control-Request-Method", "Access-Control-Request-Headers",
+	}
+	if envHeaders := os.Getenv("CORS_ALLOWED_HEADERS"); envHeaders != "" {
+		allowHeaders = strings.Split(envHeaders, ",")
+		for i := range allowHeaders {
+			allowHeaders[i] = strings.TrimSpace(allowHeaders[i])
+		}
+	}
+
 	return CORSConfig{
-		AllowOrigins: allowOrigins,
-		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"},
-		AllowHeaders: []string{
-			"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With",
-			"X-API-KEY", "Access-Control-Request-Method", "Access-Control-Request-Headers",
-		},
+		AllowOrigins:     allowOrigins,
+		AllowMethods:     allowMethods,
+		AllowHeaders:     allowHeaders,
 		ExposeHeaders:    []string{"Content-Length", "Content-Type", "X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
