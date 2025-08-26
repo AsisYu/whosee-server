@@ -10,57 +10,61 @@ Whosee.me 是一个高性能的域名信息查询和分析服务，提供快速�
 
 ### 基础功能
 
-- **多提供商支持**：集成WhoisXML和WhoisFreaks等多个WHOIS数据提供商，提高数据准确性和服务可用性
-- **智能缓存系统**：基于Redis的缓存系统，根据域名到期时间动态调整缓存时长
-- **负载均衡**：智能选择最佳数据提供商，平衡API调用次数
-- **故障转移**：自动检测API故障并切换到备用提供商
+- **多提供商支持**: 集成RDAP、WhoisXML和WhoisFreaks等多个WHOIS数据提供商，提高数据准确性和服务可用性
+- **智能缓存系统**: 基于Redis的缓存系统，根据域名到期时间动态调整缓存时长
+- **负载均衡**: 智能选择最佳数据提供商，平衡API调用次数
+- **故障转移**: 自动检测API故障并切换到备用提供商
 
 ### 高级特性
 
-- **全面的健康检查系统**：提供统一的健康检查API，监控多种服务状态
-- **智能Chrome管理**：支持冷启动、热启动、智能混合三种模式，自动下载和平台检测
-- **增强的截图功能**：智能网站截图与详细错误反馈，资源优化管理
-- **高并发优化架构**：全面优化的高并发处理能力
-- **完善的错误处理**：统一的API响应格式和详细的错误分类
-- **安全防护**：包含CORS、请求验证等安全措施
+- **全面的健康检查系统**: 提供统一的健康检查API，监控多种服务状态
+- **智能Chrome管理**: 支持冷启动、热启动、智能混合三种模式，自动下载和平台检测
+- **增强的截图功能**: 智能网站截图与详细错误反馈，资源优化管理
+- **高并发优化架构**: 全面优化的高并发处理能力
+- **完善的错误处理**: 统一的API响应格式和详细的错误分类
+- **安全防护**: 包含CORS、请求验证等安全措施
 
 ## 技术架构
 
 ### 核心组件
 
-- **Web框架**：基于Gin构建的高性能Web服务
-- **缓存系统**：使用Redis进行数据缓存和分布式限流
-- **服务管理**：服务容器模式管理多个服务组件
-- **智能Chrome工具**：支持智能混合模式，自动平台检测和资源优化
-- **智能工作池**：基于CPU核心数的动态工作池，高效处理并发请求
-- **熔断保护**：防止系统在故障条件下过载的熔断器模式
-- **中间件**：认证、日志、限流、错误处理等中间件
+- **Web框架**: 基于Gin构建的高性能Web服务
+- **缓存系统**: 使用Redis进行数据缓存和分布式限流
+- **服务管理**: 服务容器模式管理多个服务组件
+- **智能Chrome工具**: 支持智能混合模式，自动平台检测和资源优化
+- **智能工作池**: 基于CPU核心数的动态工作池，高效处理并发请求
+- **熔断保护**: 防止系统在故障条件下过载的熔断器模式
+- **中间件**: 认证、日志、限流、错误处理等中间件
 
 ### 目录结构
 
 ```
 .
-├── handlers/       # 请求处理器和异步处理函数
-├── middleware/     # 中间件组件
-├── providers/      # WHOIS数据提供商实现
-├── services/       # 核心业务逻辑和服务组件
-├── routes/         # API路由定义
-├── types/          # 数据类型定义
-├── utils/          # 辅助函数和工具
-├── logs/           # 日志文件
-├── static/         # 静态资源（截图等）
-├── .env            # 环境变量配置
-└── main.go         # 应用入口
+├── handlers/                            # 请求处理器和异步处理函数
+├── middleware/                          # 中间件组件
+├── providers/                           # WHOIS数据提供商实现
+├── services/                            # 核心业务逻辑和服务组件
+├── routes/                              # API路由定义
+├── types/                               # 数据类型定义
+├── utils/                               # 辅助函数和工具
+├── docs/                                # 文档目录
+│   ├── BACKEND_AUTHENTICATION_FLOW.md  # 后端认证流程详细文档
+│   ├── AUTHENTICATION_EXAMPLES.md      # 认证示例集合文档
+│   └── ALL_JSON.md                     # API响应格式文档
+├── logs/                                # 日志文件
+├── static/                              # 静态资源（截图等）
+├── .env                                 # 环境变量配置
+└── main.go                              # 应用入口
 ```
 
 ## 安装指南
 
 ### 前置条件
 
-- 🔹 Go 1.24+
-- 🔹 Redis 6.0+
-- 🔹 WHOIS API账号（WhoisXML和/或WhoisFreaks）
-- 🔹 Chrome/Chromium (用于网站截图功能，支持自动下载和智能平台检测)
+- Go 1.24+
+- Redis 6.0+
+- WHOIS API账号（WhoisXML和/或WhoisFreaks）
+- Chrome/Chromium (用于网站截图功能，支持自动下载和智能平台检测)
 
 ### 安装步骤
 
@@ -158,23 +162,6 @@ pm2 startup
 pm2 save
 ```
 
-### Nginx配置（反向代理）
-
-```nginx
-server {
-    listen 80;
-    server_name api.whosee.me;
-
-    location / {
-        proxy_pass http://localhost:3900;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
 ## API接口说明
 
 ### 主要API端点
@@ -184,8 +171,8 @@ server {
 | `/api/health` | GET | 健康检查API，返回所有服务的健康状态 | `detailed=true/false`: 是否返回详细状态 |
 | `/api/v1/whois` | GET | WHOIS信息查询（通过查询参数） | `domain`: 要查询的域名 |
 | `/api/v1/whois/:domain` | GET | WHOIS信息查询（通过路径参数） | `:domain`: 路径中的域名 |
-| `/api/v1/rdap` | GET | RDAP协议查询（通过查询参数）🆕 | `domain`: 要查询的域名 |
-| `/api/v1/rdap/:domain` | GET | RDAP协议查询（通过路径参数）🆕 | `:domain`: 路径中的域名 |
+| `/api/v1/rdap` | GET | RDAP协议查询（通过查询参数） | `domain`: 要查询的域名 |
+| `/api/v1/rdap/:domain` | GET | RDAP协议查询（通过路径参数） | `:domain`: 路径中的域名 |
 | `/api/v1/dns` | GET | DNS记录查询（通过查询参数） | `domain`: 要查询的域名 |
 | `/api/v1/dns/:domain` | GET | DNS记录查询（通过路径参数） | `:domain`: 路径中的域名 |
 | `/api/v1/screenshot` | GET | 网站截图服务（通过查询参数） | `domain`: 要截图的域名 |
@@ -197,123 +184,24 @@ server {
 
 ### 安全认证
 
-Whosee.me API采用JWT令牌认证机制确保API安全。当需要访问受保护的API端点时，需要先获取安全令牌。
+Whosee.me API采用多层安全验证机制，包括IP白名单、API密钥验证和JWT令牌认证。详细的验证流程请参考 [后端认证流程文档](docs/BACKEND_AUTHENTICATION_FLOW.md)。
 
-#### 获取认证令牌
+#### 安全配置
 
+生产环境推荐配置:
 ```bash
-# 获取JWT令牌
-curl -X POST http://localhost:3900/api/auth/token
+DISABLE_API_SECURITY=false
+IP_WHITELIST_STRICT_MODE=false  # 允许所有ip通过API密钥访问
+API_DEV_MODE=false
+API_KEY=your_strong_api_key
+JWT_SECRET=your_strong_jwt_secret
 ```
 
-响应示例:
-
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MjE0MzI5NjQsImlhdCI6MTcyMTQzMjkzNCwiaXNzIjoid2hvaXMtYXBpLm9zLnRuIiwibm9uY2UiOiIxNzIxNDMyOTM0NTM0NjIxMzAwIiwiaXAiOiIxMjcuMC4wLjEifQ.X2mhJYGwOLmJQMYt4PqZFYKyHN7sN-F9_qZGpk1YdJE"
-}
-```
-
-#### 使用令牌访问API
-
-获取到令牌后，将其添加到请求头中进行认证：
-
-```bash
-# 使用认证令牌访问API
-curl -X GET http://localhost:3900/api/v1/whois/example.com \
-  -H "Authorization: Bearer YOUR_TOKEN_HERE"
-```
-
-注意：
-- 令牌有效期为30秒
-- 每个令牌只能使用一次
+注意:
+- JWT令牌有效期为30秒，每个令牌只能使用一次
+- API密钥可重复使用，适合程序化访问
+- 非严格模式下，IP白名单或API密钥验证任一通过即可访问
 - 请求频率限制为每IP每分钟30个令牌
-
-### 请求示例
-
-#### WHOIS查询
-```bash
-# 通过查询参数
-curl -X GET "http://localhost:3900/api/v1/whois?domain=example.com"
-
-# 通过路径参数
-curl -X GET http://localhost:3900/api/v1/whois/example.com
-```
-
-#### RDAP查询 🆕
-```bash
-# 通过查询参数（专用IANA-RDAP提供商）
-curl -X GET "http://localhost:3900/api/v1/rdap?domain=example.com"
-
-# 通过路径参数
-curl -X GET http://localhost:3900/api/v1/rdap/example.com
-```
-
-RDAP (Registration Data Access Protocol) 提供：
-- 标准化JSON格式响应
-- 更好的国际化支持
-- 增强的安全性和隐私保护
-- RESTful API设计
-
-#### DNS记录查询
-```bash
-# 通过查询参数
-curl -X GET "http://localhost:3900/api/v1/dns?domain=example.com"
-
-# 通过路径参数
-curl -X GET http://localhost:3900/api/v1/dns/example.com
-```
-
-#### 网站截图
-```bash
-# 获取截图
-curl -X GET http://localhost:3900/api/v1/screenshot/example.com
-
-# 获取Base64编码的截图
-curl -X GET http://localhost:3900/api/v1/screenshot/base64/example.com
-```
-
-#### 健康检查API
-```bash
-# 基本健康检查
-curl -X GET http://localhost:3900/api/health
-
-# 详细健康检查
-curl -X GET "http://localhost:3900/api/health?detailed=true"
-```
-
-### 统一响应格式
-
-所有API返回的JSON格式如下:
-
-#### 成功响应
-```json
-{
-  "success": true,
-  "data": {
-    // 具体的响应数据
-  },
-  "meta": {
-    "timestamp": "2025-05-10T03:21:17Z",
-    "processingTimeMs": 245,
-    "cached": false
-  }
-}
-```
-
-#### 错误响应
-```json
-{
-  "success": false,
-  "error": {
-    "code": "ERROR_CODE",
-    "message": "错误描述"
-  },
-  "meta": {
-    "timestamp": "2025-05-10T03:21:17Z"
-  }
-}
-```
 
 ### 常见错误代码
 
@@ -342,17 +230,17 @@ Whosee.me 集成了智能Chrome管理系统，特别适合WHOIS服务（主要�
 
 ### 智能混合模式
 
-默认采用智能混合模式，具有以下特性：
+默认采用智能混合模式，具有以下特性:
 
-- **智能启动策略**：首次使用快速启动，频繁使用自动切换为热启动策略
-- **智能空闲管理**：根据使用频率动态调整空闲超时时间（1.5-6分钟）
-- **实例复用**：健康的Chrome实例直接复用，避免重复启动开销
-- **自动下载**：智能检测平台并自动下载Chrome，支持中国镜像源
-- **并发控制**：最大3个并发操作，避免资源竞争
+- **智能启动策略**: 首次使用快速启动，频繁使用自动切换为热启动策略
+- **智能空闲管理**: 根据使用频率动态调整空闲超时时间（1.5-6分钟）
+- **实例复用**: 健康的Chrome实例直接复用，避免重复启动开销
+- **自动下载**: 智能检测平台并自动下载Chrome，支持中国镜像源
+- **并发控制**: 最大3个并发操作，避免资源竞争
 
 ### Chrome配置
 
-可通过环境变量 `CHROME_MODE` 配置运行模式：
+可通过环境变量 `CHROME_MODE` 配置运行模式:
 
 ```bash
 # 设置Chrome运行模式
@@ -361,7 +249,7 @@ export CHROME_MODE=cold    # 冷启动模式
 export CHROME_MODE=warm    # 热启动模式
 ```
 
-也可以在代码中动态设置：
+也可以在代码中动态设置:
 
 ```go
 // 设置全局Chrome模式
@@ -382,8 +270,32 @@ utils.SetGlobalChromeMode("auto")
 | `GIN_MODE` | Gin运行模式 | `release` |
 | `HEALTH_CHECK_INTERVAL_DAYS` | 健康检查间隔天数 | `1` |
 | `CHROME_MODE` | Chrome运行模式 | `auto` (可选: `cold`, `warm`, `auto`) |
+| `DISABLE_API_SECURITY` | 是否禁用API安全验证 | `false` |
+| `IP_WHITELIST_STRICT_MODE` | IP白名单严格模式 | `true` |
+| `API_DEV_MODE` | API开发模式 | `false` |
+| `TRUSTED_IPS` | 受信任的IP列表 | 空 |
 
 
-## AI 开发工具
+## 文档说明
 
-本项目采用 AI 辅助开发，使用 Trae 和 Cursor 等现代化 AI 工具进行代码生成、架构设计和开发优化，显著提升开发效率和代码质量。
+### 核心文档
+
+- **[后端认证流程文档](docs/BACKEND_AUTHENTICATION_FLOW.md)**: 详细说明API安全认证机制，包括JWT令牌、API密钥验证和IP白名单的完整流程，含Mermaid流程图
+- **[认证示例集合文档](docs/AUTHENTICATION_EXAMPLES.md)**: 提供各种认证场景的实用示例，包括curl命令、多语言客户端代码、错误处理和调试技巧
+- **[API响应格式文档](docs/ALL_JSON.md)**: 所有API端点的响应格式和数据结构说明
+
+### 验证流程概述
+
+后端采用多层安全验证机制:
+
+1. **安全开关检查**: 通过 `DISABLE_API_SECURITY` 控制是否启用安全验证
+2. **IP白名单验证**: 支持Redis缓存，可配置严格/非严格模式
+3. **API密钥验证**: 支持请求头和查询参数两种方式
+4. **JWT令牌认证**: 短期有效的访问令牌机制
+5. **其他安全中间件**: CORS、安全头部、限流等
+
+详细的认证流程图和配置说明请参考 [后端认证流程文档](docs/BACKEND_AUTHENTICATION_FLOW.md)，实用的认证示例请参考 [认证示例集合文档](docs/AUTHENTICATION_EXAMPLES.md)。
+
+## 开发工具
+
+本项目采用现代化开发工具链，包括 AI 辅助开发工具（Trae、Cursor）进行代码生成、架构设计和开发优化，显著提升开发效率和代码质量。
