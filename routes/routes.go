@@ -137,12 +137,15 @@ func RegisterAPIRoutes(r *gin.Engine, serviceContainer *services.ServiceContaine
 	// 应用安全中间件
 	if os.Getenv("DISABLE_API_SECURITY") != "true" {
 		// 配置IP白名单中间件
+		// StrictMode: 如果为true，需要同时满足IP白名单和API密钥验证
+		// 如果为false，只需要满足其中一个条件即可（推荐生产环境使用false）
+		strictMode := os.Getenv("IP_WHITELIST_STRICT_MODE") == "true"
 		config := middleware.IPWhitelistConfig{
 			APIKey:          os.Getenv("API_KEY"),
 			APIDevMode:      os.Getenv("API_DEV_MODE") == "true",
 			TrustedIPs:      os.Getenv("TRUSTED_IPS"),
 			RedisClient:     serviceContainer.RedisClient,
-			StrictMode:      true,
+			StrictMode:      strictMode,
 			TrustedIPsList:  []string{"127.0.0.1", "::1"},
 			CacheExpiration: 5 * time.Minute,
 		}
