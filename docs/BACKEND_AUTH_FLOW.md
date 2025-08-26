@@ -3,7 +3,7 @@
 ## 验证流程图
 
 ```mermaid
-flowchart TD
+graph TD
     A[客户端请求] --> B{检查DISABLE_API_SECURITY}
     B -->|true| Z[直接允许访问 ⚠️]
     B -->|false/未设置| C[进入安全中间件链]

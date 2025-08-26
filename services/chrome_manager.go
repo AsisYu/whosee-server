@@ -7,6 +7,7 @@ package services
 
 import (
 	"context"
+	"dmainwhoseek/utils"
 	"log"
 	"sync"
 	"time"
@@ -30,14 +31,15 @@ func GetGlobalChromeManager() *ChromeManager {
 
 // ChromeManager Chrome浏览器实例管理器
 type ChromeManager struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	allocCtx    context.Context
-	allocCancel context.CancelFunc
-	mu          sync.RWMutex
-	isRunning   bool
-	restarts    int
-	lastRestart time.Time
+	ctx          context.Context
+	cancel       context.CancelFunc
+	allocCtx     context.Context
+	allocCancel  context.CancelFunc
+	mu           sync.RWMutex
+	isRunning    bool
+	restarts     int
+	lastRestart  time.Time
+	healthLogger *utils.HealthLogger
 }
 
 var (
@@ -56,8 +58,9 @@ func GetChromeManager() *ChromeManager {
 // NewChromeManager 创建新的Chrome管理器
 func NewChromeManager() *ChromeManager {
 	manager := &ChromeManager{
-		isRunning: false,
-		restarts:  0,
+		isRunning:    false,
+		restarts:     0,
+		healthLogger: utils.GetHealthLogger(),
 	}
 
 	err := manager.Start()
@@ -258,10 +261,10 @@ func (cm *ChromeManager) HealthCheck() {
 		select {
 		case <-ticker.C:
 			if !cm.IsHealthy() {
-				log.Printf("[CHROME-MANAGER] 健康检查失败，正在重启Chrome实例...")
+				cm.healthLogger.Printf("[CHROME-MANAGER] 健康检查失败，正在重启Chrome实例...")
 				err := cm.Restart()
 				if err != nil {
-					log.Printf("[CHROME-MANAGER] 自动重启失败: %v", err)
+					cm.healthLogger.Printf("[CHROME-MANAGER] 自动重启失败: %v", err)
 				}
 			}
 		}

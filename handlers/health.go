@@ -6,7 +6,7 @@
 package handlers
 
 import (
-	"log"
+	"dmainwhoseek/utils"
 	"os"
 	"time"
 
@@ -15,11 +15,12 @@ import (
 
 // HealthCheckHandler 健康检查API处理程序
 func HealthCheckHandler(healthChecker interface{}) gin.HandlerFunc {
+	healthLogger := utils.GetHealthLogger()
 	return func(c *gin.Context) {
 		// 获取参数
 		detailed := c.DefaultQuery("detailed", "false") == "true"
 
-		log.Printf("健康检查API调用: detailed=%v, URI=%s", detailed, c.Request.RequestURI)
+		healthLogger.Printf("健康检查API调用: detailed=%v, URI=%s", detailed, c.Request.RequestURI)
 
 		// 基本响应
 		response := gin.H{
@@ -31,7 +32,7 @@ func HealthCheckHandler(healthChecker interface{}) gin.HandlerFunc {
 
 		// 获取IP地址
 		ip := c.ClientIP()
-		log.Printf("健康检查API请求来自: %s", ip)
+		healthLogger.Printf("健康检查API请求来自: %s", ip)
 
 		// 尝试获取健康检查器
 		if healthCheckerObj, hasHealthChecker := c.Get("healthChecker"); hasHealthChecker {
