@@ -17,7 +17,8 @@ Whosee.me 是一个高性能的域名信息查询和分析服务，提供快速�
 
 ### 高级特性
 
-- **全面的健康检查系统**: 提供统一的健康检查API，监控多种服务状态
+- **全面的健康检查系统**: 提供统一的健康检查API，监控多种服务状态，支持日志分离和详细统计
+- **健康检查日志分离**: 支持将健康检查日志独立存储，便于日志管理和分析，可配置静默模式
 - **智能Chrome管理**: 支持冷启动、热启动、智能混合三种模式，自动下载和平台检测
 - **增强的截图功能**: 智能网站截图与详细错误反馈，资源优化管理
 - **高并发优化架构**: 全面优化的高并发处理能力
@@ -258,6 +259,33 @@ utils.SetGlobalChromeMode("auto")
 
 ## 配置说明
 
+### 健康检查日志分离
+
+Whosee.me 支持将健康检查日志分离到独立文件，便于日志管理和分析：
+
+#### 功能特性
+
+- **独立日志文件**: 健康检查日志写入 `logs/health_YYYY-MM-DD.log` 文件
+- **主日志静默**: 可配置在主服务器日志中静默健康检查信息
+- **详细统计**: 提供健康检查总结，包含服务状态统计和耗时信息
+- **向后兼容**: 默认关闭，不影响现有部署
+
+#### 配置方式
+
+```bash
+# 启用健康检查日志分离
+HEALTH_LOG_SEPARATE=true
+
+# 启用主日志静默模式（推荐与日志分离一起使用）
+HEALTH_LOG_SILENT=true
+```
+
+#### 日志文件结构
+
+启用后将生成以下日志文件：
+- `logs/health_YYYY-MM-DD.log`: 健康检查详细日志
+- `logs/server.log`: 主服务器日志（不含健康检查信息）
+
 ### 环境变量
 
 | 变量名 | 说明 | 示例值 |
@@ -269,6 +297,8 @@ utils.SetGlobalChromeMode("auto")
 | `PORT` | 服务监听端口 | `3900` |
 | `GIN_MODE` | Gin运行模式 | `release` |
 | `HEALTH_CHECK_INTERVAL_DAYS` | 健康检查间隔天数 | `1` |
+| `HEALTH_LOG_SEPARATE` | 是否将健康检查日志分离到独立文件 | `false` |
+| `HEALTH_LOG_SILENT` | 是否在主日志中静默健康检查信息 | `false` |
 | `CHROME_MODE` | Chrome运行模式 | `auto` (可选: `cold`, `warm`, `auto`) |
 | `DISABLE_API_SECURITY` | 是否禁用API安全验证 | `false` |
 | `IP_WHITELIST_STRICT_MODE` | IP白名单严格模式 | `true` |

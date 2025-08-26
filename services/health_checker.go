@@ -6,8 +6,8 @@
 package services
 
 import (
+	"dmainwhoseek/utils"
 	"encoding/json"
-	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -25,6 +25,7 @@ type HealthChecker struct {
 	lastCheckTime     time.Time
 	lastCheckResults  map[string]interface{}
 	mutex             sync.RWMutex
+	healthLogger      *utils.HealthLogger
 }
 
 // NewHealthChecker 创建一个新的健康检查器实例
@@ -47,12 +48,13 @@ func NewHealthChecker(whoisManager *WhoisManager, dnsChecker *DNSChecker, screen
 		CheckIntervalDays: interval,
 		stopChan:          make(chan struct{}),
 		lastCheckResults:  make(map[string]interface{}),
+		healthLogger:      utils.GetHealthLogger(),
 	}
 }
 
 // Start 开始定期健康检查
 func (hc *HealthChecker) Start() {
-	log.Printf("启动定期健康检查服务，检查间隔: %d天", hc.CheckIntervalDays)
+	hc.healthLogger.Printf("启动定期健康检查服务，检查间隔: %d天", hc.CheckIntervalDays)
 
 	// 立即执行一次检查
 	hc.RunHealthCheck()
@@ -67,7 +69,7 @@ func (hc *HealthChecker) Start() {
 			case <-ticker.C:
 				hc.RunHealthCheck()
 			case <-hc.stopChan:
-				log.Println("健康检查服务已停止")
+				hc.healthLogger.Println("健康检查服务已停止")
 				return
 			}
 		}
@@ -81,13 +83,14 @@ func (hc *HealthChecker) Stop() {
 
 // ForceRefresh 强制执行健康检查（仅供内部使用）
 func (hc *HealthChecker) ForceRefresh() {
-	log.Println("执行强制健康检查刷新")
+	hc.healthLogger.Println("执行强制健康检查刷新")
 	hc.RunHealthCheck()
 }
 
 // RunHealthCheck 执行一次完整的健康检查
 func (hc *HealthChecker) RunHealthCheck() {
-	log.Println("执行定期健康检查...")
+	startTime := time.Now()
+	hc.healthLogger.LogHealthCheckStart("定期健康检查")
 
 	// 创建存储所有服务结果的映射
 	servicesMap := make(map[string]interface{})
@@ -124,10 +127,6 @@ func (hc *HealthChecker) RunHealthCheck() {
 			}
 		}
 
-		// 记录健康检查结果
-		log.Printf("WHOIS健康检查完成: 提供商总数=%d, 可用提供商=%d, 测试成功=%d",
-			totalProviders, availableProviders, successfulTests)
-
 		// 构建WHOIS服务状态
 		var whoisStatus string
 		switch {
@@ -140,6 +139,11 @@ func (hc *HealthChecker) RunHealthCheck() {
 		default:
 			whoisStatus = "up"
 		}
+
+		// 记录健康检查结果
+		hc.healthLogger.LogServiceStatus("WHOIS", totalProviders, availableProviders, whoisStatus)
+		hc.healthLogger.Printf("WHOIS健康检查完成: 提供商总数=%d, 可用提供商=%d, 测试成功=%d",
+			totalProviders, availableProviders, successfulTests)
 
 		// 添加WHOIS服务到服务映射
 		servicesMap["whois"] = map[string]interface{}{
@@ -211,7 +215,8 @@ func (hc *HealthChecker) RunHealthCheck() {
 			"servers":   dnsResults,
 		}
 
-		log.Printf("DNS健康检查完成: 总服务器=%d, 可用服务器=%d, 状态=%s",
+		hc.healthLogger.LogServiceStatus("DNS", totalServers, availableServers, dnsStatus)
+		hc.healthLogger.Printf("DNS健康检查完成: 总服务器=%d, 可用服务器=%d, 状态=%s",
 			totalServers, availableServers, dnsStatus)
 	}
 
@@ -251,7 +256,8 @@ func (hc *HealthChecker) RunHealthCheck() {
 			"servers":   screenshotServers,
 		}
 
-		log.Printf("截图服务健康检查完成: 服务数=%d, 可用服务=%d, 状态=%s",
+		hc.healthLogger.LogServiceStatus("截图", totalServices, availableServices, screenshotStatus)
+		hc.healthLogger.Printf("截图服务健康检查完成: 服务数=%d, 可用服务=%d, 状态=%s",
 			totalServices, availableServices, screenshotStatus)
 	}
 
@@ -291,24 +297,82 @@ func (hc *HealthChecker) RunHealthCheck() {
 			"servers":   itdogServers,
 		}
 
-		log.Printf("ITDog服务健康检查完成: 服务数=%d, 可用服务=%d, 状态=%s",
+		hc.healthLogger.LogServiceStatus("ITDog", totalServices, availableServices, itdogStatus)
+		hc.healthLogger.Printf("ITDog服务健康检查完成: 服务数=%d, 可用服务=%d, 状态=%s",
 			totalServices, availableServices, itdogStatus)
 	}
 
 	// 更新最后检查时间和结果
 	hc.mutex.Lock()
 
+	// 生成健康检查总结
+	hc.generateHealthCheckSummary(servicesMap)
+
 	// 将服务映射添加到结果中
 	hc.lastCheckResults["services"] = servicesMap
 
 	// 记录服务映射内容
 	servicesJson, _ := json.Marshal(servicesMap)
-	log.Printf("健康检查缓存服务映射内容: %s", string(servicesJson))
+	hc.healthLogger.Printf("健康检查缓存服务映射内容: %s", string(servicesJson))
 
 	hc.lastCheckTime = time.Now()
 	hc.mutex.Unlock()
 
-	log.Printf("全部服务健康检查完成，已更新缓存")
+	hc.healthLogger.LogHealthCheckEnd("全部服务健康检查", time.Since(startTime))
+}
+
+// generateHealthCheckSummary 生成健康检查总结
+func (hc *HealthChecker) generateHealthCheckSummary(servicesMap map[string]interface{}) {
+	hc.healthLogger.Printf("")
+	hc.healthLogger.Printf("=== 健康检查总结 ===")
+	
+	totalServices := 0
+	availableServices := 0
+	allServicesUp := true
+	
+	// 统计各服务状态
+	for serviceName, serviceData := range servicesMap {
+		if serviceMap, ok := serviceData.(map[string]interface{}); ok {
+			if total, ok := serviceMap["total"].(int); ok {
+				totalServices += total
+			}
+			if available, ok := serviceMap["available"].(int); ok {
+				availableServices += available
+			}
+			if status, ok := serviceMap["status"].(string); ok {
+				if status != "up" {
+					allServicesUp = false
+				}
+				hc.healthLogger.Printf("  %s服务: %s (可用: %v/%v)", 
+					serviceName, status, serviceMap["available"], serviceMap["total"])
+			}
+		}
+	}
+	
+	// 计算总体健康状态
+	overallStatus := "up"
+	if !allServicesUp {
+		if availableServices == 0 {
+			overallStatus = "down"
+		} else {
+			overallStatus = "degraded"
+		}
+	}
+	
+	// 计算可用率
+	availabilityRate := float64(0)
+	if totalServices > 0 {
+		availabilityRate = float64(availableServices) / float64(totalServices) * 100
+	}
+	
+	hc.healthLogger.Printf("")
+	hc.healthLogger.Printf("总体状态: %s", overallStatus)
+	hc.healthLogger.Printf("服务总数: %d", totalServices)
+	hc.healthLogger.Printf("可用服务: %d", availableServices)
+	hc.healthLogger.Printf("可用率: %.1f%%", availabilityRate)
+	hc.healthLogger.Printf("检查时间: %s", time.Now().Format("2006-01-02 15:04:05"))
+	hc.healthLogger.Printf("=== 健康检查总结结束 ===")
+	hc.healthLogger.Printf("")
 }
 
 // GetLastCheckTime 获取最后一次检查的时间
@@ -347,7 +411,7 @@ func (hc *HealthChecker) UpdateCheckResults(results map[string]interface{}) {
 	// 更新检查时间
 	hc.lastCheckTime = time.Now()
 
-	log.Printf("健康检查结果已更新，时间: %s", hc.lastCheckTime.Format(time.RFC3339))
+	hc.healthLogger.Printf("健康检查结果已更新，时间: %s", hc.lastCheckTime.Format(time.RFC3339))
 }
 
 // GetHealthStatus 获取健康状态 - 用于健康检查API处理程序
@@ -358,12 +422,12 @@ func (hc *HealthChecker) GetHealthStatus() map[string]interface{} {
 	// 如果缓存的结果中有services字段，直接返回
 	if services, exists := hc.lastCheckResults["services"]; exists {
 		if servicesMap, ok := services.(map[string]interface{}); ok {
-			log.Printf("返回缓存的健康检查服务状态，包含 %d 个服务", len(servicesMap))
+			hc.healthLogger.Printf("返回缓存的健康检查服务状态，包含 %d 个服务", len(servicesMap))
 			return servicesMap
 		}
 	}
 
 	// 如果没有services字段，返回整个lastCheckResults作为向后兼容
-	log.Printf("返回完整的健康检查结果作为服务状态")
+	hc.healthLogger.Printf("返回完整的健康检查结果作为服务状态")
 	return hc.lastCheckResults
 }

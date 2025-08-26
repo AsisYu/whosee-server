@@ -38,7 +38,7 @@ func setupLogger() {
 		log.Printf("警告: 无法创建日志目录: %v", err)
 	}
 
-	// 创建日志切割器
+	// 创建主服务器日志切割器
 	logFile = &lumberjack.Logger{
 		Filename:   fmt.Sprintf("logs/server_%s.log", time.Now().Format("2006-01-02")),
 		MaxSize:    100,  // 每个日志文件最大大小，单位为MB
@@ -55,7 +55,11 @@ func setupLogger() {
 	// 设置Gin的默认日志输出
 	gin.DefaultWriter = mw
 
+	// 初始化健康检查日志记录器
+	utils.InitHealthLogger()
+
 	log.Println("日志系统初始化完成，启用了日志切割功能")
+	log.Println("健康检查日志记录器已初始化")
 }
 
 // 辅助函数

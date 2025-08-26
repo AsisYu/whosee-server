@@ -7,8 +7,8 @@ package services
 
 import (
 	"context"
+	"dmainwhoseek/utils"
 	"fmt"
-	"log"
 	"net"
 	"time"
 )
@@ -18,6 +18,7 @@ type DNSChecker struct {
 	lastCheckTime time.Time
 	servers       []string
 	testDomains   []string
+	healthLogger  *utils.HealthLogger
 }
 
 // NewDNSChecker 创建一个新的DNS检查器
@@ -33,6 +34,7 @@ func NewDNSChecker() *DNSChecker {
 			"baidu.com",
 			"github.com",
 		},
+		healthLogger: utils.GetHealthLogger(),
 	}
 }
 
@@ -45,7 +47,7 @@ func (dc *DNSChecker) GetLastCheckTime() time.Time {
 func (dc *DNSChecker) TestDNSHealth() map[string]interface{} {
 	results := make(map[string]interface{})
 
-	log.Println("开始测试DNS服务健康状态...")
+	dc.healthLogger.Println("开始测试DNS服务健康状态...")
 
 	totalServers := len(dc.servers)
 	availableServers := 0
@@ -127,7 +129,7 @@ func (dc *DNSChecker) TestDNSHealth() map[string]interface{} {
 	// 更新最后检查时间
 	dc.lastCheckTime = time.Now()
 
-	log.Printf("DNS服务检查完成: 共%d个服务器, %d个可用", totalServers, availableServers)
+	dc.healthLogger.Printf("DNS服务检查完成: 共%d个服务器, %d个可用", totalServers, availableServers)
 
 	return results
 }
@@ -183,7 +185,7 @@ func (dc *DNSChecker) CheckAllServers() []interface{} {
 		}
 	}
 
-	log.Printf("DNS检查完成，共检查了%d个服务器", len(servers))
+	dc.healthLogger.Printf("DNS检查完成，共检查了%d个服务器", len(servers))
 	return servers
 }
 

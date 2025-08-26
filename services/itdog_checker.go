@@ -7,6 +7,7 @@ package services
 
 import (
 	"context"
+	"dmainwhoseek/utils"
 	"fmt"
 	"log"
 	"time"
@@ -17,11 +18,14 @@ import (
 // ITDogChecker 服务健康检查器
 type ITDogChecker struct {
 	lastCheckTime time.Time
+	healthLogger  *utils.HealthLogger
 }
 
 // NewITDogChecker 创建新的ITDog检查器
 func NewITDogChecker() *ITDogChecker {
-	return &ITDogChecker{}
+	return &ITDogChecker{
+		healthLogger: utils.GetHealthLogger(),
+	}
 }
 
 // GetLastCheckTime 获取最后检查时间
@@ -31,8 +35,8 @@ func (ic *ITDogChecker) GetLastCheckTime() time.Time {
 
 // TestITDogHealth 测试ITDog服务健康状态
 func (ic *ITDogChecker) TestITDogHealth(domain ...string) map[string]interface{} {
-	log.Println("开始检查ITDog服务健康状态...")
-	log.Println("[ITDog:详细-健康] 开始执行ITDog健康检查")
+	ic.healthLogger.Println("开始检查ITDog服务健康状态...")
+	ic.healthLogger.Println("[ITDog:详细-健康] 开始执行ITDog健康检查")
 
 	result := map[string]interface{}{
 		"available":      false,
@@ -47,13 +51,13 @@ func (ic *ITDogChecker) TestITDogHealth(domain ...string) map[string]interface{}
 	// 如果提供了域名，构建包含域名的URL
 	if len(domain) > 0 && domain[0] != "" {
 		targetDomain := domain[0]
-		log.Printf("[ITDog:详细-健康] 使用用户指定的域名: %s", targetDomain)
+		ic.healthLogger.Printf("[ITDog:详细-健康] 使用用户指定的域名: %s", targetDomain)
 		// 构建ITDog URL，将目标域名作为ping参数
 		testURL = fmt.Sprintf("https://www.itdog.cn/ping/%s", targetDomain)
 	} else {
-		log.Printf("[ITDog:详细-健康] 未提供特定域名，将使用默认ITDog测试URL")
+		ic.healthLogger.Printf("[ITDog:详细-健康] 未提供特定域名，将使用默认ITDog测试URL")
 	}
-	log.Printf("[ITDog:详细-健康] 将测试目标URL: %s", testURL)
+	ic.healthLogger.Printf("[ITDog:详细-健康] 将测试目标URL: %s", testURL)
 
 	testResult := map[string]interface{}{
 		"url":          testURL,
@@ -65,7 +69,7 @@ func (ic *ITDogChecker) TestITDogHealth(domain ...string) map[string]interface{}
 
 	// 记录开始时间
 	startTime := time.Now()
-	log.Printf("[ITDog:详细-健康] 开始启动Chrome浏览器实例")
+	ic.healthLogger.Printf("[ITDog:详细-健康] 开始启动Chrome浏览器实例")
 
 	// 创建一个新的浏览器上下文
 	ctx, cancel := chromedp.NewContext(
@@ -73,12 +77,12 @@ func (ic *ITDogChecker) TestITDogHealth(domain ...string) map[string]interface{}
 		chromedp.WithLogf(log.Printf),
 	)
 	defer cancel()
-	log.Printf("[ITDog:详细-健康] Chrome浏览器实例启动完成")
+	ic.healthLogger.Printf("[ITDog:详细-健康] Chrome浏览器实例启动完成")
 
 	// 设置超时 - 15秒
 	timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	log.Printf("[ITDog:详细-健康] 设置超时为15秒，开始访问测试URL: %s", testURL)
+	ic.healthLogger.Printf("[ITDog:详细-健康] 设置超时为15秒，开始访问测试URL: %s", testURL)
 
 	// 使用chromedp检查页面可访问性
 	var pageTitle string
@@ -94,27 +98,27 @@ func (ic *ITDogChecker) TestITDogHealth(domain ...string) map[string]interface{}
 	responseTime := time.Since(startTime)
 	testResult["responseTime"] = responseTime.Milliseconds()
 	result["responseTime"] = responseTime.Milliseconds()
-	log.Printf("[ITDog:详细-健康] 浏览器访问完成，耗时: %v", responseTime)
+	ic.healthLogger.Printf("[ITDog:详细-健康] 浏览器访问完成，耗时: %v", responseTime)
 
 	if err != nil {
 		testResult["message"] = "请求失败：" + err.Error()
 		testResult["success"] = false
-		log.Printf("ITDog健康检查失败: %v", err)
-		log.Printf("[ITDog:详细-健康] 访问失败或获取标题失败: %v", err)
+		ic.healthLogger.Printf("ITDog健康检查失败: %v", err)
+		ic.healthLogger.Printf("[ITDog:详细-健康] 访问失败或获取标题失败: %v", err)
 	} else {
 		testResult["success"] = true
 		testResult["message"] = "ITDog网站可访问，页面标题: " + pageTitle
-		log.Printf("ITDog健康检查成功: 页面标题 '%s'", pageTitle)
-		log.Printf("[ITDog:详细-健康] 成功访问页面，获取标题: %s", pageTitle)
+		ic.healthLogger.Printf("ITDog健康检查成功: 页面标题 '%s'", pageTitle)
+		ic.healthLogger.Printf("[ITDog:详细-健康] 成功访问页面，获取标题: %s", pageTitle)
 	}
 
 	// 更新结果状态
 	result["available"] = testResult["success"].(bool)
 	result["testSuccessful"] = testResult["success"].(bool)
-	log.Printf("[ITDog:详细-健康] 健康状态: %s", map[bool]string{true: "可用", false: "不可用"}[result["available"].(bool)])
+	ic.healthLogger.Printf("[ITDog:详细-健康] 健康状态: %s", map[bool]string{true: "可用", false: "不可用"}[result["available"].(bool)])
 
 	// 添加测试结果
-	log.Printf("[ITDog:详细-健康] 添加测试结果到返回数据")
+	ic.healthLogger.Printf("[ITDog:详细-健康] 添加测试结果到返回数据")
 	testResults := result["testResults"].([]map[string]interface{})
 	testResults = append(testResults, testResult)
 	result["testResults"] = testResults
@@ -122,8 +126,8 @@ func (ic *ITDogChecker) TestITDogHealth(domain ...string) map[string]interface{}
 	// 更新最后检查时间
 	ic.lastCheckTime = time.Now()
 
-	log.Printf("ITDog服务健康检查结果: %s", map[bool]string{true: "可用", false: "不可用"}[result["available"].(bool)])
-	log.Printf("[ITDog:详细-健康] 测试完成，当前状态: %s，耗时: %v",
+	ic.healthLogger.Printf("ITDog服务健康检查结果: %s", map[bool]string{true: "可用", false: "不可用"}[result["available"].(bool)])
+	ic.healthLogger.Printf("[ITDog:详细-健康] 测试完成，当前状态: %s，耗时: %v",
 		map[bool]string{true: "可用", false: "不可用"}[result["available"].(bool)], responseTime)
 
 	return result
