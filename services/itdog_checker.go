@@ -71,18 +71,30 @@ func (ic *ITDogChecker) TestITDogHealth(domain ...string) map[string]interface{}
 	startTime := time.Now()
 	ic.healthLogger.Printf("[ITDog:详细-健康] 开始启动Chrome浏览器实例")
 
-	// 创建一个新的浏览器上下文
-	ctx, cancel := chromedp.NewContext(
-		context.Background(),
-		chromedp.WithLogf(log.Printf),
+	// 优先使用全局Chrome工具（下载好的Chrome），不可用时再回退
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
 	)
+	if chromeUtil := utils.GetGlobalChromeUtil(); chromeUtil != nil {
+		c, can, err := chromeUtil.GetContext(15 * time.Second)
+		if err == nil {
+			ctx, cancel = c, can
+			ic.healthLogger.Printf("[ITDog:详细-健康] 使用全局Chrome工具上下文")
+		} else {
+			ic.healthLogger.Printf("[ITDog:详细-健康] 获取全局Chrome上下文失败: %v，回退到默认上下文", err)
+			ctx, cancel = chromedp.NewContext(context.Background(), chromedp.WithLogf(log.Printf))
+		}
+	} else {
+		ctx, cancel = chromedp.NewContext(context.Background(), chromedp.WithLogf(log.Printf))
+	}
 	defer cancel()
 	ic.healthLogger.Printf("[ITDog:详细-健康] Chrome浏览器实例启动完成")
 
-	// 设置超时 - 15秒
-	timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	ic.healthLogger.Printf("[ITDog:详细-健康] 设置超时为15秒，开始访问测试URL: %s", testURL)
+	// 设置超时 - 30秒（给Chrome操作更多时间）
+	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer timeoutCancel()
+	ic.healthLogger.Printf("[ITDog:详细-健康] 设置超时为30秒，开始访问测试URL: %s", testURL)
 
 	// 使用chromedp检查页面可访问性
 	var pageTitle string
@@ -90,7 +102,10 @@ func (ic *ITDogChecker) TestITDogHealth(domain ...string) map[string]interface{}
 		// 导航到ITDog网站
 		chromedp.Navigate(testURL),
 
-		// 等待页面加载（检查标题）
+		// 等待页面加载完成
+		chromedp.WaitReady("body", chromedp.ByQuery),
+
+		// 获取页面标题
 		chromedp.Title(&pageTitle),
 	)
 

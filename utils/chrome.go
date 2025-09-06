@@ -898,8 +898,6 @@ func (cu *ChromeUtil) getRecommendations(diagnosis map[string]interface{}) []str
 
 // EnsureStarted 确保Chrome已启动（智能混合模式）
 func (cu *ChromeUtil) EnsureStarted() error {
-	cu.mu.Lock()
-	defer cu.mu.Unlock()
 
 	// 更新使用统计
 	cu.statsLock.Lock()

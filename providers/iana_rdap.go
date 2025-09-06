@@ -161,69 +161,57 @@ func (p *IANARDAPProvider) Query(domain string) (*types.WhoisResponse, error, bo
 		}, fmt.Errorf("无效的域名格式: %s", domain), false
 	}
 
-	// 尝试多个查询策略
-	strategies := []struct {
-		name string
-		url  string
-	}{
-		{
-			name: "RDAP.org引导服务器",
-			url:  "https://rdap.org/domain/" + url.QueryEscape(domain),
-		},
-		{
-			name: "通用RDAP引导服务器",
-			url:  "https://bootstrap.rdap.org/domain/" + url.QueryEscape(domain),
-		},
-	}
+	// 尝试多个查询策略（统一在内部函数处理）
+	strategies := p.buildRDAPStrategies(domain)
 
 	var lastErr error
-	var response *types.WhoisResponse
-
-	for i, strategy := range strategies {
-		log.Printf("RDAP查询策略 %d (%s): %s", i+1, strategy.name, strategy.url)
-
-		resp, err := p.queryRDAP(strategy.url, domain)
+	for i, s := range strategies {
+		log.Printf("RDAP查询策略 %d (%s): %s", i+1, s.name, s.url)
+		resp, err := p.queryRDAPInternal(s.url, domain, 3)
 		if err == nil && resp != nil {
-			response = resp
-			break
+			return resp, nil, false
 		}
-
 		lastErr = err
-		log.Printf("RDAP查询策略 %d (%s) 失败: %v", i+1, strategy.name, err)
-
-		// 如果不是最后一个策略，稍作延迟
+		log.Printf("RDAP查询策略 %d (%s) 失败: %v", i+1, s.name, err)
 		if i < len(strategies)-1 {
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
 
-	if response == nil {
-		return &types.WhoisResponse{
-			Domain:         domain,
-			Available:      false,
-			StatusCode:     500,
-			StatusMessage:  "RDAP查询失败",
-			SourceProvider: p.Name(),
-		}, fmt.Errorf("所有RDAP查询策略都失败: %v", lastErr), false
-	}
-
-	return response, nil, false
+	return &types.WhoisResponse{
+		Domain:         domain,
+		Available:      false,
+		StatusCode:     500,
+		StatusMessage:  "RDAP查询失败",
+		SourceProvider: p.Name(),
+	}, fmt.Errorf("所有RDAP查询策略都失败: %v", lastErr), false
 }
 
+// 保留原函数签名，转调内部实现，保留日志等行为
 func (p *IANARDAPProvider) queryRDAP(rdapURL, domain string) (*types.WhoisResponse, error) {
+	return p.queryRDAPInternal(rdapURL, domain, 3)
+}
+
+// 保留原函数签名，转调内部实现
+func (p *IANARDAPProvider) queryRDAPWithRedirectLimit(rdapURL, domain string, maxRedirects int) (*types.WhoisResponse, error) {
+	return p.queryRDAPInternal(rdapURL, domain, maxRedirects)
+}
+
+// 统一处理：请求、重定向和解析
+func (p *IANARDAPProvider) queryRDAPInternal(rdapURL, domain string, maxRedirects int) (*types.WhoisResponse, error) {
+	if maxRedirects <= 0 {
+		return nil, fmt.Errorf("RDAP重定向次数超过限制")
+	}
+
 	log.Printf("请求RDAP: %s", rdapURL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", rdapURL, nil)
+	req, err := p.buildRDAPRequest(ctx, rdapURL)
 	if err != nil {
-		return nil, fmt.Errorf("创建RDAP请求失败: %v", err)
+		return nil, err
 	}
-
-	// 设置请求头
-	req.Header.Set("Accept", "application/rdap+json, application/json")
-	req.Header.Set("User-Agent", "WhoseeWhois/1.0 (+https://whosee.me)")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -233,16 +221,9 @@ func (p *IANARDAPProvider) queryRDAP(rdapURL, domain string) (*types.WhoisRespon
 
 	log.Printf("RDAP API 响应状态码: %d", resp.StatusCode)
 
-	// 处理重定向 - 引导服务器通常返回302重定向
-	if resp.StatusCode == 302 || resp.StatusCode == 301 {
-		location := resp.Header.Get("Location")
-		if location == "" {
-			return nil, fmt.Errorf("RDAP重定向缺少Location头")
-		}
-		log.Printf("RDAP重定向到: %s", location)
-
-		// 递归查询重定向的URL，但限制重定向次数以防止无限循环
-		return p.queryRDAPWithRedirectLimit(location, domain, 3)
+	// 处理重定向
+	if loc := p.redirectLocation(resp); loc != "" {
+		return p.queryRDAPInternal(loc, domain, maxRedirects-1)
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
@@ -250,170 +231,161 @@ func (p *IANARDAPProvider) queryRDAP(rdapURL, domain string) (*types.WhoisRespon
 		return nil, fmt.Errorf("读取RDAP响应失败: %v", err)
 	}
 
-	// 处理HTTP错误状态
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("RDAP查询失败 (状态码: %d): Not Found - 可能该域名不存在或RDAP服务器不支持该域名", resp.StatusCode)
-	} else if resp.StatusCode != 200 {
-		// 尝试解析错误信息
-		var errorResp map[string]interface{}
-		if json.Unmarshal(body, &errorResp) == nil {
-			if title, ok := errorResp["title"].(string); ok {
-				return nil, fmt.Errorf("RDAP查询失败 (状态码: %d): %s", resp.StatusCode, title)
-			}
-		}
-		return nil, fmt.Errorf("RDAP查询失败，状态码: %d", resp.StatusCode)
+	if err := p.handleRDAPHTTPError(resp, body); err != nil {
+		return nil, err
 	}
 
-	// 解析RDAP响应
-	var rdapResp RDAPResponse
-	if err := json.Unmarshal(body, &rdapResp); err != nil {
-		return nil, fmt.Errorf("解析RDAP响应失败: %v", err)
+	rdapResp, err := p.decodeRDAP(body)
+	if err != nil {
+		return nil, err
 	}
 
-	// 转换为统一格式
-	whoisResp := p.convertRDAPToWhois(&rdapResp, domain)
-	log.Printf("RDAP 查询成功: 域名=%s, 注册商=%s, 创建日期=%s, 到期日期=%s",
-		domain, whoisResp.Registrar, whoisResp.CreateDate, whoisResp.ExpiryDate)
-
+	whoisResp := p.convertRDAPToWhois(rdapResp, domain)
+	log.Printf("RDAP 查询成功: 域名=%s, 注册商=%s, 创建日期=%s, 到期日期=%s", domain, whoisResp.Registrar, whoisResp.CreateDate, whoisResp.ExpiryDate)
 	return whoisResp, nil
 }
 
-// queryRDAPWithRedirectLimit 处理重定向，带重定向次数限制
-func (p *IANARDAPProvider) queryRDAPWithRedirectLimit(rdapURL, domain string, maxRedirects int) (*types.WhoisResponse, error) {
-	if maxRedirects <= 0 {
-		return nil, fmt.Errorf("RDAP重定向次数超过限制")
-	}
-
-	log.Printf("跟随RDAP重定向: %s (剩余重定向次数: %d)", rdapURL, maxRedirects)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
-
+// 构建请求（统一的header设置）
+func (p *IANARDAPProvider) buildRDAPRequest(ctx context.Context, rdapURL string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", rdapURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("创建RDAP重定向请求失败: %v", err)
+		return nil, fmt.Errorf("创建RDAP请求失败: %v", err)
 	}
-
-	// 设置请求头
 	req.Header.Set("Accept", "application/rdap+json, application/json")
 	req.Header.Set("User-Agent", "WhoseeWhois/1.0 (+https://whosee.me)")
+	return req, nil
+}
 
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("RDAP重定向请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	log.Printf("RDAP重定向响应状态码: %d", resp.StatusCode)
-
-	// 再次检查重定向
+// 提取重定向地址
+func (p *IANARDAPProvider) redirectLocation(resp *http.Response) string {
 	if resp.StatusCode == 302 || resp.StatusCode == 301 {
 		location := resp.Header.Get("Location")
-		if location == "" {
-			return nil, fmt.Errorf("RDAP重定向缺少Location头")
+		if location != "" {
+			log.Printf("RDAP重定向到: %s", location)
+			return location
 		}
-		return p.queryRDAPWithRedirectLimit(location, domain, maxRedirects-1)
+		log.Printf("RDAP重定向缺少Location头")
 	}
+	return ""
+}
 
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取RDAP重定向响应失败: %v", err)
+// 统一处理HTTP错误与错误消息解析
+func (p *IANARDAPProvider) handleRDAPHTTPError(resp *http.Response, body []byte) error {
+	if resp.StatusCode == http.StatusOK {
+		return nil
 	}
-
-	// 处理HTTP错误状态
-	if resp.StatusCode == 404 {
-		return nil, fmt.Errorf("RDAP查询失败 (状态码: %d): Not Found - 可能该域名不存在或RDAP服务器不支持该域名", resp.StatusCode)
-	} else if resp.StatusCode != 200 {
-		// 尝试解析错误信息
-		var errorResp map[string]interface{}
-		if json.Unmarshal(body, &errorResp) == nil {
-			if title, ok := errorResp["title"].(string); ok {
-				return nil, fmt.Errorf("RDAP查询失败 (状态码: %d): %s", resp.StatusCode, title)
-			}
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("RDAP查询失败 (状态码: %d): Not Found - 可能该域名不存在或RDAP服务器不支持该域名", resp.StatusCode)
+	}
+	var errorResp map[string]interface{}
+	if json.Unmarshal(body, &errorResp) == nil {
+		if title, ok := errorResp["title"].(string); ok {
+			return fmt.Errorf("RDAP查询失败 (状态码: %d): %s", resp.StatusCode, title)
 		}
-		return nil, fmt.Errorf("RDAP查询失败，状态码: %d", resp.StatusCode)
 	}
+	return fmt.Errorf("RDAP查询失败，状态码: %d", resp.StatusCode)
+}
 
-	// 解析RDAP响应
+// 解码RDAP JSON
+func (p *IANARDAPProvider) decodeRDAP(body []byte) (*RDAPResponse, error) {
 	var rdapResp RDAPResponse
 	if err := json.Unmarshal(body, &rdapResp); err != nil {
 		return nil, fmt.Errorf("解析RDAP响应失败: %v", err)
 	}
+	return &rdapResp, nil
+}
 
-	// 转换为统一格式
-	whoisResp := p.convertRDAPToWhois(&rdapResp, domain)
-	log.Printf("RDAP 重定向查询成功: 域名=%s, 注册商=%s, 创建日期=%s, 到期日期=%s",
-		domain, whoisResp.Registrar, whoisResp.CreateDate, whoisResp.ExpiryDate)
-
-	return whoisResp, nil
+// 构建策略列表，便于拓展
+func (p *IANARDAPProvider) buildRDAPStrategies(domain string) []struct{ name, url string } {
+	return []struct{ name, url string }{
+		{name: "RDAP.org引导服务器", url: "https://rdap.org/domain/" + url.QueryEscape(domain)},
+		{name: "通用RDAP引导服务器", url: "https://bootstrap.rdap.org/domain/" + url.QueryEscape(domain)},
+	}
 }
 
 func (p *IANARDAPProvider) convertRDAPToWhois(rdap *RDAPResponse, domain string) *types.WhoisResponse {
 	whois := &types.WhoisResponse{
 		Domain:         domain,
-		Available:      false, // RDAP返回数据说明域名已注册
+		Available:      false,
 		StatusCode:     200,
 		StatusMessage:  "查询成功",
 		SourceProvider: p.Name(),
 		WhoisServer:    rdap.Port43,
 	}
 
-	// 处理域名状态
+	// 状态
 	whois.Status = rdap.Status
 
-	// 处理事件信息（创建、更新、到期日期）
-	for _, event := range rdap.Events {
-		switch strings.ToLower(event.EventAction) {
-		case "registration":
-			whois.CreateDate = event.EventDate
-		case "last update of rdap database", "last changed":
-			whois.UpdateDate = event.EventDate
-		case "expiration":
-			whois.ExpiryDate = event.EventDate
-		}
+	// 事件 -> 日期
+	createDate, updateDate, expiryDate := p.deriveDatesFromEvents(rdap.Events)
+	if whois.CreateDate == "" {
+		whois.CreateDate = createDate
+	}
+	if whois.UpdateDate == "" {
+		whois.UpdateDate = updateDate
+	}
+	if whois.ExpiryDate == "" {
+		whois.ExpiryDate = expiryDate
 	}
 
-	// 处理名称服务器
-	var nameServers []string
-	for _, ns := range rdap.NameServers {
-		if ns.LDHName != "" {
-			nameServers = append(nameServers, ns.LDHName)
-		}
-	}
-	whois.NameServers = nameServers
+	// 名称服务器
+	whois.NameServers = p.collectNameServers(rdap.NameServers)
 
-	// 处理实体信息（注册商、联系人）
+	// 实体信息
 	for _, entity := range rdap.Entities {
 		if p.entityHasRole(entity.Roles, "registrar") {
 			whois.Registrar = p.extractEntityName(entity)
 		}
-
 		if p.entityHasRole(entity.Roles, "registrant") {
 			whois.Registrant = p.extractContact(entity)
 		}
-
 		if p.entityHasRole(entity.Roles, "administrative") {
 			whois.Admin = p.extractContact(entity)
 		}
-
 		if p.entityHasRole(entity.Roles, "technical") {
 			whois.Tech = p.extractContact(entity)
 		}
 	}
 
-	// 计算域名年龄
+	// 域名年龄
 	if whois.CreateDate != "" {
 		if createTime, err := time.Parse("2006-01-02T15:04:05Z", whois.CreateDate); err == nil {
 			whois.DomainAge = int(time.Since(createTime).Hours() / 24)
 		}
 	}
 
-	// 格式化日期（将ISO 8601转换为更友好的格式）
+	// 归一化日期显示
 	whois.CreateDate = p.formatDate(whois.CreateDate)
 	whois.UpdateDate = p.formatDate(whois.UpdateDate)
 	whois.ExpiryDate = p.formatDate(whois.ExpiryDate)
 
 	return whois
+}
+
+// 从事件导出日期（分离逻辑，降低复杂度）
+func (p *IANARDAPProvider) deriveDatesFromEvents(events []Event) (create string, update string, expiry string) {
+	for _, event := range events {
+		switch strings.ToLower(event.EventAction) {
+		case "registration":
+			create = event.EventDate
+		case "last update of rdap database", "last changed":
+			update = event.EventDate
+		case "expiration":
+			expiry = event.EventDate
+		}
+	}
+	return
+}
+
+// 收集名称服务器（分离逻辑）
+func (p *IANARDAPProvider) collectNameServers(nses []NameServer) []string {
+	var nameServers []string
+	for _, ns := range nses {
+		if ns.LDHName != "" {
+			nameServers = append(nameServers, ns.LDHName)
+		}
+	}
+	return nameServers
 }
 
 func (p *IANARDAPProvider) extractEntityName(entity Entity) string {

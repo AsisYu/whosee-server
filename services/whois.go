@@ -8,6 +8,7 @@ package services
 import (
 	"context"
 	"dmainwhoseek/types"
+	"dmainwhoseek/utils"
 	"encoding/json"
 	"time"
 
@@ -27,7 +28,7 @@ type WhoisService struct {
 
 func (s *WhoisService) GetWhoisInfo(domain string) (*types.WhoisResponse, error) {
 	// 先从 Redis 缓存获取
-	cacheKey := "whois:" + domain
+	cacheKey := utils.BuildCacheKey("cache", "whois", utils.SanitizeDomain(domain))
 	if cachedData, err := s.redis.Get(context.Background(), cacheKey).Result(); err == nil {
 		var whoisInfo types.WhoisResponse
 		if err := json.Unmarshal([]byte(cachedData), &whoisInfo); err == nil {
@@ -50,6 +51,16 @@ func (s *WhoisService) GetWhoisInfo(domain string) (*types.WhoisResponse, error)
 	}
 
 	return whoisInfo, nil
+}
+
+func CacheWhoisResult(rdb *redis.Client, domain string, response interface{}) error {
+	ctx := context.Background()
+	cacheKey := utils.BuildCacheKey("cache", "whois", utils.SanitizeDomain(domain))
+	data, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	return rdb.Set(ctx, cacheKey, data, 24*time.Hour).Err()
 }
 
 // 根据域名到期时间计算缓存时间

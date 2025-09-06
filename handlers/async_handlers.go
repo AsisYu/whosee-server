@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"dmainwhoseek/services"
+	"dmainwhoseek/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -29,12 +30,12 @@ func getRedisFromContext(ctx context.Context) (*redis.Client, error) {
 	if value == nil {
 		return nil, fmt.Errorf("redis client not found in context")
 	}
-	
+
 	redisClient, ok := value.(*redis.Client)
 	if !ok || redisClient == nil {
 		return nil, fmt.Errorf("invalid redis client in context")
 	}
-	
+
 	return redisClient, nil
 }
 
@@ -44,12 +45,12 @@ func getDomainFromContext(ctx context.Context) (string, error) {
 	if value == nil {
 		return "", fmt.Errorf("domain not found in context")
 	}
-	
+
 	domain, ok := value.(string)
 	if !ok || domain == "" {
 		return "", fmt.Errorf("invalid domain in context")
 	}
-	
+
 	return domain, nil
 }
 
@@ -75,10 +76,10 @@ func AsyncDNSQuery(ctx context.Context, dnsChecker *services.DNSChecker) (gin.H,
 	}
 
 	// 检查缓存
-	cacheKey := fmt.Sprintf("dns:%s", domain)
+	cacheKey := utils.BuildCacheKey("cache", "dns", utils.SanitizeDomain(domain))
 	if cachedData, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
 		log.Printf("从缓存获取DNS记录: %s", domain)
-		
+
 		var result gin.H
 		if err := json.Unmarshal([]byte(cachedData), &result); err == nil {
 			// 添加缓存元数据
@@ -93,11 +94,11 @@ func AsyncDNSQuery(ctx context.Context, dnsChecker *services.DNSChecker) (gin.H,
 	result := dnsChecker.TestDNSHealth()
 	result["isCached"] = false
 	result["cacheTime"] = time.Now().Format(time.RFC3339)
-	
+
 	// 保存到缓存
 	data, _ := json.Marshal(result)
 	rdb.Set(ctx, cacheKey, data, 30*time.Minute) // DNS记录缓存30分钟
-	
+
 	return result, nil
 }
 
@@ -120,7 +121,7 @@ func AsyncScreenshot(ctx context.Context, screenshotChecker *services.Screenshot
 		// 如果无法获取Redis客户端，则直接进行截图而不使用缓存
 		log.Printf("开始不缓存的截图: %s", domain)
 		log.Printf("[Screenshot:详细] 将直接执行截图操作（无缓存模式）")
-		
+
 		// 模拟gin的ResponseWriter以获取截图结果
 		mockResponseWriter := &mockResponseWriter{headers: make(http.Header)}
 		mockGinContext := &gin.Context{
@@ -130,10 +131,10 @@ func AsyncScreenshot(ctx context.Context, screenshotChecker *services.Screenshot
 				Value: domain,
 			}},
 		}
-		
+
 		// 直接调用截图函数（无缓存模式）
 		Screenshot(mockGinContext, nil)
-		
+
 		// 获取截图结果
 		response := mockResponseWriter.GetResponseData()
 		if response != nil {
@@ -144,7 +145,7 @@ func AsyncScreenshot(ctx context.Context, screenshotChecker *services.Screenshot
 				fileName := filepath.Base(imageURL)
 				filePath = filepath.Join("./static/screenshots", fileName)
 			}
-			
+
 			return gin.H{
 				"success":    response["success"],
 				"imageUrl":   response["imageUrl"],
@@ -167,7 +168,7 @@ func AsyncScreenshot(ctx context.Context, screenshotChecker *services.Screenshot
 	log.Printf("[Screenshot:详细] 成功获取Redis客户端")
 
 	// 检查缓存
-	cacheKey := fmt.Sprintf("screenshot:%s", domain)
+	cacheKey := utils.BuildCacheKey("cache", "screenshot", utils.SanitizeDomain(domain))
 	log.Printf("[Screenshot:详细] 开始检查截图缓存，键名: %s", cacheKey)
 	if cachedData, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
 		log.Printf("从缓存获取截图: %s", domain)
@@ -176,7 +177,7 @@ func AsyncScreenshot(ctx context.Context, screenshotChecker *services.Screenshot
 		var response ScreenshotResponse
 		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
 			log.Printf("[Screenshot:详细] 成功解析缓存的JSON数据")
-			
+
 			// 提取文件路径
 			filePath := ""
 			if response.ImageUrl != "" {
@@ -184,7 +185,7 @@ func AsyncScreenshot(ctx context.Context, screenshotChecker *services.Screenshot
 				fileName := filepath.Base(response.ImageUrl)
 				filePath = filepath.Join("./static/screenshots", fileName)
 			}
-			
+
 			return gin.H{
 				"success":    response.Success,
 				"imageUrl":   response.ImageUrl,
@@ -214,7 +215,7 @@ func AsyncScreenshot(ctx context.Context, screenshotChecker *services.Screenshot
 	// 执行截图
 	log.Printf("开始新的截图: %s", domain)
 	log.Printf("[Screenshot:详细] 将执行新的截图操作")
-	Screenshot(mockGinContext, rdb)  // 传递Redis客户端以启用缓存
+	Screenshot(mockGinContext, rdb) // 传递Redis客户端以启用缓存
 
 	// 获取截图结果
 	response := mockResponseWriter.GetResponseData()
@@ -226,7 +227,7 @@ func AsyncScreenshot(ctx context.Context, screenshotChecker *services.Screenshot
 			fileName := filepath.Base(imageURL)
 			filePath = filepath.Join("./static/screenshots", fileName)
 		}
-		
+
 		return gin.H{
 			"success":    response["success"],
 			"imageUrl":   response["imageUrl"],
@@ -266,7 +267,7 @@ func AsyncItdogScreenshot(ctx context.Context, itdogChecker *services.ITDogCheck
 		// 如果无法获取Redis客户端，则直接进行截图而不使用缓存
 		log.Printf("开始不缓存的ITDog截图: %s", domain)
 		log.Printf("[ITDog:详细] 将直接执行测速截图操作（无缓存模式）")
-		
+
 		// 模拟gin的ResponseWriter以获取截图结果
 		mockResponseWriter := &mockResponseWriter{headers: make(http.Header)}
 		mockGinContext := &gin.Context{
@@ -276,10 +277,10 @@ func AsyncItdogScreenshot(ctx context.Context, itdogChecker *services.ITDogCheck
 				Value: domain,
 			}},
 		}
-		
+
 		// 直接调用截图函数（无缓存模式）
 		ItdogScreenshot(mockGinContext, nil)
-		
+
 		// 获取截图结果
 		response := mockResponseWriter.GetResponseData()
 		if response != nil {
@@ -290,7 +291,7 @@ func AsyncItdogScreenshot(ctx context.Context, itdogChecker *services.ITDogCheck
 				fileName := filepath.Base(imageURL)
 				filePath = filepath.Join("./static/itdog", fileName)
 			}
-			
+
 			return gin.H{
 				"success":    response["success"],
 				"imageUrl":   response["imageUrl"],
@@ -313,7 +314,7 @@ func AsyncItdogScreenshot(ctx context.Context, itdogChecker *services.ITDogCheck
 	log.Printf("[ITDog:详细] 成功获取Redis客户端")
 
 	// 检查缓存
-	cacheKey := fmt.Sprintf("itdog_screenshot:%s", domain)
+	cacheKey := utils.BuildCacheKey("cache", "itdog", "map", utils.SanitizeDomain(domain))
 	log.Printf("[ITDog:详细] 开始检查测速截图缓存，键名: %s", cacheKey)
 	if cachedData, err := rdb.Get(ctx, cacheKey).Result(); err == nil {
 		log.Printf("从缓存获取ITDog截图: %s", domain)
@@ -322,7 +323,7 @@ func AsyncItdogScreenshot(ctx context.Context, itdogChecker *services.ITDogCheck
 		var response ScreenshotResponse
 		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
 			log.Printf("[ITDog:详细] 成功解析缓存的JSON数据")
-			
+
 			// 提取文件路径
 			filePath := ""
 			if response.ImageUrl != "" {
@@ -330,7 +331,7 @@ func AsyncItdogScreenshot(ctx context.Context, itdogChecker *services.ITDogCheck
 				fileName := filepath.Base(response.ImageUrl)
 				filePath = filepath.Join("./static/itdog", fileName)
 			}
-			
+
 			return gin.H{
 				"success":    response.Success,
 				"imageUrl":   response.ImageUrl,
@@ -360,7 +361,7 @@ func AsyncItdogScreenshot(ctx context.Context, itdogChecker *services.ITDogCheck
 	// 执行截图
 	log.Printf("开始新的ITDog截图: %s", domain)
 	log.Printf("[ITDog:详细] 将执行新的测速截图操作")
-	ItdogScreenshot(mockGinContext, rdb)  // 传递Redis客户端以启用缓存
+	ItdogScreenshot(mockGinContext, rdb) // 传递Redis客户端以启用缓存
 
 	// 获取截图结果
 	response := mockResponseWriter.GetResponseData()
@@ -372,7 +373,7 @@ func AsyncItdogScreenshot(ctx context.Context, itdogChecker *services.ITDogCheck
 			fileName := filepath.Base(imageURL)
 			filePath = filepath.Join("./static/itdog", fileName)
 		}
-		
+
 		return gin.H{
 			"success":    response["success"],
 			"imageUrl":   response["imageUrl"],

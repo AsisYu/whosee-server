@@ -62,6 +62,37 @@ type ITDogScreenshotConfig struct {
 	Description string // 截图描述（用于日志）
 }
 
+// 通用小工具：缓存与文件写入，降低重复
+func getJSONCache(ctx context.Context, rdb *redis.Client, key string, out interface{}) bool {
+	if rdb == nil {
+		return false
+	}
+	data, err := rdb.Get(ctx, key).Result()
+	if err != nil || data == "" {
+		return false
+	}
+	return json.Unmarshal([]byte(data), out) == nil
+}
+
+func setJSONCache(ctx context.Context, rdb *redis.Client, key string, value interface{}, ttl time.Duration) {
+	if rdb == nil {
+		return
+	}
+	b, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	_ = rdb.Set(ctx, key, b, ttl).Err()
+}
+
+func ensureDir(dir string) error {
+	return os.MkdirAll(dir, 0755)
+}
+
+func writeFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0644)
+}
+
 // performITDogScreenshot 执行ITDog截图的通用函数
 func performITDogScreenshot(config ITDogScreenshotConfig, rdb *redis.Client) (*ScreenshotResponse, error) {
 	// 检查ITDog测速服务熔断器状态
@@ -75,20 +106,16 @@ func performITDogScreenshot(config ITDogScreenshotConfig, rdb *redis.Client) (*S
 		}, nil
 	}
 
-	// 检查缓存
-	cachedData, err := rdb.Get(context.Background(), config.CacheKey).Result()
-	if err == nil {
-		// 缓存命中
-		var response ScreenshotResponse
-		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			log.Printf("使用缓存的%s: %s", config.Description, config.Domain)
-			response.FromCache = true
-			return &response, nil
-		}
+	// 缓存
+	var cached ScreenshotResponse
+	if getJSONCache(context.Background(), rdb, config.CacheKey, &cached) {
+		log.Printf("使用缓存的%s: %s", config.Description, config.Domain)
+		cached.FromCache = true
+		return &cached, nil
 	}
 
-	// 确保截图目录存在
-	if err := os.MkdirAll(itdogScreenshotDir, 0755); err != nil {
+	// 目录
+	if err := ensureDir(itdogScreenshotDir); err != nil {
 		log.Printf("创建ITDog截图目录失败: %v", err)
 		return &ScreenshotResponse{
 			Success: false,
@@ -100,7 +127,7 @@ func performITDogScreenshot(config ITDogScreenshotConfig, rdb *redis.Client) (*S
 	log.Printf("开始获取%s (统一浏览器): %s", config.Description, config.Domain)
 
 	// 执行截图
-	err = sb.ItdogBreaker.Execute(func() error {
+	err := sb.ItdogBreaker.Execute(func() error {
 		// 获取全局Chrome工具
 		chromeUtil := utils.GetGlobalChromeUtil()
 		if chromeUtil == nil {
@@ -311,7 +338,7 @@ func performITDogScreenshot(config ITDogScreenshotConfig, rdb *redis.Client) (*S
 			log.Printf("[CHROME-UTIL] %s截图成功，大小: %d bytes", config.Description, len(buf))
 
 			// 保存截图
-			if err := os.WriteFile(config.FilePath, buf, 0644); err != nil {
+			if err := writeFile(config.FilePath, buf); err != nil {
 				log.Printf("保存%s失败: %v", config.Description, err)
 				return err
 			}
@@ -369,17 +396,9 @@ func performITDogScreenshot(config ITDogScreenshotConfig, rdb *redis.Client) (*S
 		}, nil
 	}
 
-	// 构建响应
-	response := &ScreenshotResponse{
-		Success:   true,
-		ImageUrl:  config.FileURL,
-		FromCache: false,
-	}
-
-	// 缓存结果 (12小时)
-	if responseJSON, err := json.Marshal(response); err == nil {
-		rdb.Set(context.Background(), config.CacheKey, responseJSON, 12*time.Hour)
-	}
+	// 写入缓存（12小时）
+	response := &ScreenshotResponse{Success: true, ImageUrl: config.FileURL}
+	setJSONCache(context.Background(), rdb, config.CacheKey, response, 12*time.Hour)
 
 	log.Printf("%s完成: %s", config.Description, config.Domain)
 	return response, nil
@@ -421,23 +440,19 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 构建缓存键
-	cacheKey := fmt.Sprintf("screenshot:%s", domain)
+	cacheKey := utils.BuildCacheKey("cache", "screenshot", utils.SanitizeDomain(domain))
 
 	// 检查缓存
-	cachedData, err := rdb.Get(context.Background(), cacheKey).Result()
-	if err == nil {
-		// 缓存命中
-		var response ScreenshotResponse
-		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			log.Printf("使用缓存的截图: %s", domain)
-			response.FromCache = true
-			c.JSON(http.StatusOK, response)
-			return
-		}
+	var cachedResp ScreenshotResponse
+	if getJSONCache(context.Background(), rdb, cacheKey, &cachedResp) {
+		log.Printf("使用缓存的截图: %s", domain)
+		cachedResp.FromCache = true
+		c.JSON(http.StatusOK, cachedResp)
+		return
 	}
 
 	// 确保截图目录存在
-	if err := os.MkdirAll(screenshotDir, 0755); err != nil {
+	if err := ensureDir(screenshotDir); err != nil {
 		log.Printf("创建截图目录失败: %v", err)
 		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
 			Success: false,
@@ -454,18 +469,45 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 	// 使用chromedp获取截图
 	log.Printf("开始获取域名截图: %s", domain)
 
-	// 执行截图
+	var err error
 	err = sb.ScreenshotBreaker.Execute(func() error {
-		// 创建上下文
-		ctx, cancel := chromedp.NewContext(
-			context.Background(),
-			chromedp.WithLogf(log.Printf),
-		)
-		defer cancel()
+		// 优先使用全局Chrome工具
+		chromeUtil := utils.GetGlobalChromeUtil()
+		var ctx context.Context
+		var cancel context.CancelFunc
+		var timeoutCancel context.CancelFunc
 
-		// 设置超时 - 允许超时45秒，避免服务不可用
-		ctx, cancel = context.WithTimeout(ctx, 45*time.Second)
-		defer cancel()
+		if chromeUtil != nil {
+			// 使用全局Chrome工具（已包含超时）
+			globalCtx, globalCancel, err := chromeUtil.GetContext(45 * time.Second)
+			if err != nil {
+				log.Printf("获取全局Chrome上下文失败: %v，回退到chromedp.NewContext", err)
+				// 回退到chromedp.NewContext
+				ctx, cancel = chromedp.NewContext(
+					context.Background(),
+					chromedp.WithLogf(log.Printf),
+				)
+				// 为回退方案设置超时
+				ctx, timeoutCancel = context.WithTimeout(ctx, 45*time.Second)
+				defer timeoutCancel()
+			} else {
+				ctx = globalCtx
+				cancel = globalCancel
+			}
+		} else {
+			// 回退到chromedp.NewContext
+			ctx, cancel = chromedp.NewContext(
+				context.Background(),
+				chromedp.WithLogf(log.Printf),
+			)
+			// 为回退方案设置超时
+			ctx, timeoutCancel = context.WithTimeout(ctx, 45*time.Second)
+			defer timeoutCancel()
+		}
+
+		if cancel != nil {
+			defer cancel()
+		}
 
 		// 截图数据
 		var buf []byte
@@ -483,7 +525,7 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 		}
 
 		// 保存截图
-		if err := os.WriteFile(filePath, buf, 0644); err != nil {
+		if err := writeFile(filePath, buf); err != nil {
 			log.Printf("保存截图失败: %v", err)
 			return err
 		}
@@ -535,9 +577,7 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 缓存响应
-	if responseJSON, err := json.Marshal(response); err == nil {
-		rdb.Set(context.Background(), cacheKey, responseJSON, screenshotCacheDuration)
-	}
+	setJSONCache(context.Background(), rdb, cacheKey, response, screenshotCacheDuration)
 
 	// 计算耗时
 	duration := time.Since(startTime).Milliseconds()
@@ -558,36 +598,57 @@ func ScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 构建缓存键
-	cacheKey := fmt.Sprintf("screenshot:base64:%s", domain)
+	cacheKey := utils.BuildCacheKey("cache", "screenshot", "base64", utils.SanitizeDomain(domain))
 
 	// 检查缓存
-	cachedData, err := rdb.Get(context.Background(), cacheKey).Result()
-	if err == nil {
-		// 缓存命中
-		var response ScreenshotResponse
-		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			log.Printf("使用缓存的Base64截图: %s", domain)
-			response.FromCache = true
-			c.JSON(http.StatusOK, response)
-			return
-		}
+	var cached ScreenshotResponse
+	if getJSONCache(context.Background(), rdb, cacheKey, &cached) {
+		log.Printf("使用缓存的Base64截图: %s", domain)
+		cached.FromCache = true
+		c.JSON(http.StatusOK, cached)
+		return
 	}
 
 	// 完整URL
 	url := fmt.Sprintf("https://%s", domain)
 
-	// 创建上下文
-	ctx, cancel := chromedp.NewContext(context.Background())
-	defer cancel()
+	// 优先使用全局Chrome工具
+	chromeUtil := utils.GetGlobalChromeUtil()
+	var ctx context.Context
+	var cancel context.CancelFunc
+	var timeoutCancel context.CancelFunc
 
-	// 设置超时
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	if chromeUtil != nil {
+		// 使用全局Chrome工具（已包含超时）
+		globalCtx, globalCancel, err := chromeUtil.GetContext(30 * time.Second)
+		if err != nil {
+			log.Printf("获取全局Chrome上下文失败: %v，回退到chromedp.NewContext", err)
+			// 回退到chromedp.NewContext
+			ctx, cancel = chromedp.NewContext(context.Background())
+			// 为回退方案设置超时
+			ctx, timeoutCancel = context.WithTimeout(ctx, 30*time.Second)
+			defer timeoutCancel()
+		} else {
+			ctx = globalCtx
+			cancel = globalCancel
+		}
+	} else {
+		// 回退到chromedp.NewContext
+		ctx, cancel = chromedp.NewContext(context.Background())
+		// 为回退方案设置超时
+		ctx, timeoutCancel = context.WithTimeout(ctx, 30*time.Second)
+		defer timeoutCancel()
+	}
+
+	if cancel != nil {
+		defer cancel()
+	}
 
 	// 截图数据
 	var buf []byte
 
 	// 执行截图
+	var err error
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(url),
 		chromedp.Sleep(5*time.Second),
@@ -633,9 +694,7 @@ func ScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 缓存响应
-	if responseJSON, err := json.Marshal(response); err == nil {
-		rdb.Set(context.Background(), cacheKey, responseJSON, screenshotCacheDuration)
-	}
+	setJSONCache(context.Background(), rdb, cacheKey, response, screenshotCacheDuration)
 
 	c.JSON(http.StatusOK, response)
 }
@@ -660,23 +719,19 @@ func ElementScreenshot(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 构建缓存键
-	cacheKey := fmt.Sprintf("screenshot:element:%s:%s", req.URL, req.Selector)
+	cacheKey := utils.BuildCacheKey("cache", "screenshot", "element", req.URL, req.Selector)
 
 	// 检查缓存
-	cachedData, err := rdb.Get(context.Background(), cacheKey).Result()
-	if err == nil {
-		// 缓存命中
-		var response ScreenshotResponse
-		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			log.Printf("使用缓存的元素截图: %s, 选择器: %s", req.URL, req.Selector)
-			response.FromCache = true
-			c.JSON(http.StatusOK, response)
-			return
-		}
+	var cachedResp ScreenshotResponse
+	if getJSONCache(context.Background(), rdb, cacheKey, &cachedResp) {
+		log.Printf("使用缓存的元素截图: %s, 选择器: %s", req.URL, req.Selector)
+		cachedResp.FromCache = true
+		c.JSON(http.StatusOK, cachedResp)
+		return
 	}
 
 	// 确保截图目录存在
-	if err := os.MkdirAll(screenshotDir, 0755); err != nil {
+	if err := ensureDir(screenshotDir); err != nil {
 		log.Printf("创建截图目录失败: %v", err)
 		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
 			Success: false,
@@ -693,16 +748,43 @@ func ElementScreenshot(c *gin.Context, rdb *redis.Client) {
 	// 使用chromedp获取元素截图
 	log.Printf("开始获取元素截图: %s, 选择器: %s", req.URL, req.Selector)
 
-	// 创建上下文
-	ctx, cancel := chromedp.NewContext(
-		context.Background(),
-		chromedp.WithLogf(log.Printf),
-	)
-	defer cancel()
+	// 优先使用全局Chrome工具
+	chromeUtil := utils.GetGlobalChromeUtil()
+	var ctx context.Context
+	var cancel context.CancelFunc
+	var timeoutCancel context.CancelFunc
 
-	// 设置超时
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	if chromeUtil != nil {
+		// 使用全局Chrome工具（已包含超时）
+		globalCtx, globalCancel, err := chromeUtil.GetContext(30 * time.Second)
+		if err != nil {
+			log.Printf("获取全局Chrome上下文失败: %v，回退到chromedp.NewContext", err)
+			// 回退到chromedp.NewContext
+			ctx, cancel = chromedp.NewContext(
+				context.Background(),
+				chromedp.WithLogf(log.Printf),
+			)
+			// 为回退方案设置超时
+			ctx, timeoutCancel = context.WithTimeout(ctx, 30*time.Second)
+			defer timeoutCancel()
+		} else {
+			ctx = globalCtx
+			cancel = globalCancel
+		}
+	} else {
+		// 回退到chromedp.NewContext
+		ctx, cancel = chromedp.NewContext(
+			context.Background(),
+			chromedp.WithLogf(log.Printf),
+		)
+		// 为回退方案设置超时
+		ctx, timeoutCancel = context.WithTimeout(ctx, 30*time.Second)
+		defer timeoutCancel()
+	}
+
+	if cancel != nil {
+		defer cancel()
+	}
 
 	// 截图数据
 	var buf []byte
@@ -714,6 +796,7 @@ func ElementScreenshot(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 执行截图
+	var err error
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(req.URL),
 		chromedp.Sleep(waitTime), // 等待页面加载完成
@@ -761,7 +844,7 @@ func ElementScreenshot(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 保存截图
-	if err := os.WriteFile(filePath, buf, 0644); err != nil {
+	if err := writeFile(filePath, buf); err != nil {
 		log.Printf("保存截图失败: %v", err)
 		c.JSON(http.StatusInternalServerError, ScreenshotResponse{
 			Success: false,
@@ -778,9 +861,7 @@ func ElementScreenshot(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 缓存响应
-	if responseJSON, err := json.Marshal(response); err == nil {
-		rdb.Set(context.Background(), cacheKey, responseJSON, screenshotCacheDuration)
-	}
+	setJSONCache(context.Background(), rdb, cacheKey, response, screenshotCacheDuration)
 
 	// 计算耗时
 	duration := time.Since(startTime).Milliseconds()
@@ -806,19 +887,15 @@ func ElementScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 构建缓存键
-	cacheKey := fmt.Sprintf("screenshot:element:base64:%s:%s", req.URL, req.Selector)
+	cacheKey := utils.BuildCacheKey("cache", "screenshot", "element", "base64", req.URL, req.Selector)
 
 	// 检查缓存
-	cachedData, err := rdb.Get(context.Background(), cacheKey).Result()
-	if err == nil {
-		// 缓存命中
-		var response ScreenshotResponse
-		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			log.Printf("使用缓存的Base64元素截图: %s, 选择器: %s", req.URL, req.Selector)
-			response.FromCache = true
-			c.JSON(http.StatusOK, response)
-			return
-		}
+	var cachedResp ScreenshotResponse
+	if getJSONCache(context.Background(), rdb, cacheKey, &cachedResp) {
+		log.Printf("使用缓存的Base64元素截图: %s, 选择器: %s", req.URL, req.Selector)
+		cachedResp.FromCache = true
+		c.JSON(http.StatusOK, cachedResp)
+		return
 	}
 
 	// 设置等待时间
@@ -827,18 +904,43 @@ func ElementScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 		waitTime = time.Duration(req.Wait) * time.Second
 	}
 
-	// 创建上下文
-	ctx, cancel := chromedp.NewContext(context.Background())
-	defer cancel()
+	// 优先使用全局Chrome工具
+	chromeUtil := utils.GetGlobalChromeUtil()
+	var ctx context.Context
+	var cancel context.CancelFunc
+	var timeoutCancel context.CancelFunc
 
-	// 设置超时
-	ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	if chromeUtil != nil {
+		// 使用全局Chrome工具（已包含超时）
+		globalCtx, globalCancel, err := chromeUtil.GetContext(30 * time.Second)
+		if err != nil {
+			log.Printf("获取全局Chrome上下文失败: %v，回退到chromedp.NewContext", err)
+			// 回退到chromedp.NewContext
+			ctx, cancel = chromedp.NewContext(context.Background())
+			// 为回退方案设置超时
+			ctx, timeoutCancel = context.WithTimeout(ctx, 30*time.Second)
+			defer timeoutCancel()
+		} else {
+			ctx = globalCtx
+			cancel = globalCancel
+		}
+	} else {
+		// 回退到chromedp.NewContext
+		ctx, cancel = chromedp.NewContext(context.Background())
+		// 为回退方案设置超时
+		ctx, timeoutCancel = context.WithTimeout(ctx, 30*time.Second)
+		defer timeoutCancel()
+	}
+
+	if cancel != nil {
+		defer cancel()
+	}
 
 	// 截图数据
 	var buf []byte
 
 	// 执行截图
+	var err error
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(req.URL),
 		chromedp.Sleep(waitTime), // 等待页面加载完成
@@ -898,9 +1000,7 @@ func ElementScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	}
 
 	// 缓存响应
-	if responseJSON, err := json.Marshal(response); err == nil {
-		rdb.Set(context.Background(), cacheKey, responseJSON, screenshotCacheDuration)
-	}
+	setJSONCache(context.Background(), rdb, cacheKey, response, screenshotCacheDuration)
 
 	c.JSON(http.StatusOK, response)
 }
@@ -931,7 +1031,7 @@ func ItdogScreenshot(c *gin.Context, rdb *redis.Client) {
 	// 配置截图参数
 	config := ITDogScreenshotConfig{
 		Domain:      domain,
-		CacheKey:    fmt.Sprintf("itdog_screenshot:%s", domain),
+		CacheKey:    utils.BuildCacheKey("cache", "itdog", "map", utils.SanitizeDomain(domain)),
 		FileName:    fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix()),
 		FileURL:     fmt.Sprintf("/static/itdog/itdog_%s_%d.png", domain, time.Now().Unix()),
 		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix())),
@@ -988,7 +1088,7 @@ func ItdogTableScreenshot(c *gin.Context, rdb *redis.Client) {
 	// 配置截图参数
 	config := ITDogScreenshotConfig{
 		Domain:      domain,
-		CacheKey:    fmt.Sprintf("itdog_table_screenshot:%s", domain),
+		CacheKey:    utils.BuildCacheKey("cache", "itdog", "table", utils.SanitizeDomain(domain)),
 		FileName:    fmt.Sprintf("itdog_table_%s_%d.png", domain, time.Now().Unix()),
 		FileURL:     fmt.Sprintf("/static/itdog/itdog_table_%s_%d.png", domain, time.Now().Unix()),
 		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_table_%s_%d.png", domain, time.Now().Unix())),
@@ -1045,7 +1145,7 @@ func ItdogIPScreenshot(c *gin.Context, rdb *redis.Client) {
 	// 配置截图参数
 	config := ITDogScreenshotConfig{
 		Domain:      domain,
-		CacheKey:    fmt.Sprintf("itdog_ip_screenshot:%s", domain),
+		CacheKey:    utils.BuildCacheKey("cache", "itdog", "ip", utils.SanitizeDomain(domain)),
 		FileName:    fmt.Sprintf("itdog_ip_%s_%d.png", domain, time.Now().Unix()),
 		FileURL:     fmt.Sprintf("/static/itdog/itdog_ip_%s_%d.png", domain, time.Now().Unix()),
 		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_ip_%s_%d.png", domain, time.Now().Unix())),
@@ -1102,7 +1202,7 @@ func ItdogResolveScreenshot(c *gin.Context, rdb *redis.Client) {
 	// 配置截图参数
 	config := ITDogScreenshotConfig{
 		Domain:      domain,
-		CacheKey:    fmt.Sprintf("itdog_resolve_screenshot:%s", domain),
+		CacheKey:    utils.BuildCacheKey("cache", "itdog", "resolve", utils.SanitizeDomain(domain)),
 		FileName:    fmt.Sprintf("itdog_resolve_%s_%d.png", domain, time.Now().Unix()),
 		FileURL:     fmt.Sprintf("/static/itdog/itdog_resolve_%s_%d.png", domain, time.Now().Unix()),
 		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_resolve_%s_%d.png", domain, time.Now().Unix())),
@@ -1159,7 +1259,7 @@ func ItdogScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	// 配置截图参数
 	config := ITDogScreenshotConfig{
 		Domain:      domain,
-		CacheKey:    fmt.Sprintf("itdog_screenshot_base64:%s", domain),
+		CacheKey:    utils.BuildCacheKey("cache", "itdog", "map", "base64", utils.SanitizeDomain(domain)),
 		FileName:    fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix()),
 		FileURL:     fmt.Sprintf("/static/itdog/itdog_%s_%d.png", domain, time.Now().Unix()),
 		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_%s_%d.png", domain, time.Now().Unix())),
@@ -1216,7 +1316,7 @@ func ItdogTableScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	// 配置截图参数
 	config := ITDogScreenshotConfig{
 		Domain:      domain,
-		CacheKey:    fmt.Sprintf("itdog_table_screenshot_base64:%s", domain),
+		CacheKey:    utils.BuildCacheKey("cache", "itdog", "table", "base64", utils.SanitizeDomain(domain)),
 		FileName:    fmt.Sprintf("itdog_table_%s_%d.png", domain, time.Now().Unix()),
 		FileURL:     fmt.Sprintf("/static/itdog/itdog_table_%s_%d.png", domain, time.Now().Unix()),
 		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_table_%s_%d.png", domain, time.Now().Unix())),
@@ -1273,7 +1373,7 @@ func ItdogIPBase64Screenshot(c *gin.Context, rdb *redis.Client) {
 	// 配置截图参数
 	config := ITDogScreenshotConfig{
 		Domain:      domain,
-		CacheKey:    fmt.Sprintf("itdog_ip_screenshot_base64:%s", domain),
+		CacheKey:    utils.BuildCacheKey("cache", "itdog", "ip", "base64", utils.SanitizeDomain(domain)),
 		FileName:    fmt.Sprintf("itdog_ip_%s_%d.png", domain, time.Now().Unix()),
 		FileURL:     fmt.Sprintf("/static/itdog/itdog_ip_%s_%d.png", domain, time.Now().Unix()),
 		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_ip_%s_%d.png", domain, time.Now().Unix())),
@@ -1330,7 +1430,7 @@ func ItdogResolveScreenshotBase64(c *gin.Context, rdb *redis.Client) {
 	// 配置截图参数
 	config := ITDogScreenshotConfig{
 		Domain:      domain,
-		CacheKey:    fmt.Sprintf("itdog_resolve_screenshot_base64:%s", domain),
+		CacheKey:    utils.BuildCacheKey("cache", "itdog", "resolve", "base64", utils.SanitizeDomain(domain)),
 		FileName:    fmt.Sprintf("itdog_resolve_%s_%d.png", domain, time.Now().Unix()),
 		FileURL:     fmt.Sprintf("/static/itdog/itdog_resolve_%s_%d.png", domain, time.Now().Unix()),
 		FilePath:    filepath.Join(itdogScreenshotDir, fmt.Sprintf("itdog_resolve_%s_%d.png", domain, time.Now().Unix())),
@@ -1374,16 +1474,21 @@ func performITDogScreenshotBase64(config ITDogScreenshotConfig, rdb *redis.Clien
 		}, nil
 	}
 
-	// 检查缓存
-	cachedData, err := rdb.Get(context.Background(), config.CacheKey).Result()
-	if err == nil {
-		// 缓存命中
-		var response ScreenshotResponse
-		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			log.Printf("使用缓存的%s: %s", config.Description, config.Domain)
-			response.FromCache = true
-			return &response, nil
-		}
+	// 缓存
+	var cached ScreenshotResponse
+	if getJSONCache(context.Background(), rdb, config.CacheKey, &cached) {
+		log.Printf("使用缓存的%s: %s", config.Description, config.Domain)
+		cached.FromCache = true
+		return &cached, nil
+	}
+
+	// 目录
+	if err := ensureDir(itdogScreenshotDir); err != nil {
+		log.Printf("创建ITDog截图目录失败: %v", err)
+		return &ScreenshotResponse{
+			Success: false,
+			Error:   "服务器内部错误",
+		}, nil
 	}
 
 	// 使用统一的Chrome管理器获取截图
@@ -1392,7 +1497,7 @@ func performITDogScreenshotBase64(config ITDogScreenshotConfig, rdb *redis.Clien
 	var buf []byte
 
 	// 执行截图
-	err = sb.ItdogBreaker.Execute(func() error {
+	err := sb.ItdogBreaker.Execute(func() error {
 		// 获取全局Chrome工具
 		chromeUtil := utils.GetGlobalChromeUtil()
 		if chromeUtil == nil {
@@ -1601,23 +1706,17 @@ func performITDogScreenshotBase64(config ITDogScreenshotConfig, rdb *redis.Clien
 			}
 
 			log.Printf("[CHROME-UTIL] %s截图成功，大小: %d bytes", config.Description, len(buf))
-
-			// 保存截图
-			if err := os.WriteFile(config.FilePath, buf, 0644); err != nil {
+			if err := writeFile(config.FilePath, buf); err != nil {
 				log.Printf("保存%s失败: %v", config.Description, err)
 				return err
 			}
-
-			return nil // 成功完成
+			return nil
 		}
-
 		return fmt.Errorf("重试次数耗尽")
 	})
 
 	if err != nil {
 		log.Printf("%s失败: %v", config.Description, err)
-
-		// 检查是否是服务熔断器开启的错误
 		if err.Error() == "circuit open" {
 			return &ScreenshotResponse{
 				Success: false,
@@ -1625,39 +1724,16 @@ func performITDogScreenshotBase64(config ITDogScreenshotConfig, rdb *redis.Clien
 				Message: "服务过载，请稍后再试",
 			}, nil
 		}
-
-		// 检查是否是网站无法访问的错误
-		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") ||
-			strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") ||
-			strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") ||
-			strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") ||
-			strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") ||
-			strings.Contains(err.Error(), "context deadline exceeded") ||
-			strings.Contains(err.Error(), "TLS handshake timeout") {
-			// 返回特定的错误信息，指示itdog网站无法访问
+		if strings.Contains(err.Error(), "net::ERR_NAME_NOT_RESOLVED") || strings.Contains(err.Error(), "net::ERR_CONNECTION_REFUSED") || strings.Contains(err.Error(), "net::ERR_CONNECTION_TIMED_OUT") || strings.Contains(err.Error(), "net::ERR_CONNECTION_RESET") || strings.Contains(err.Error(), "net::ERR_INTERNET_DISCONNECTED") || strings.Contains(err.Error(), "context deadline exceeded") || strings.Contains(err.Error(), "TLS handshake timeout") {
 			return &ScreenshotResponse{
 				Success: false,
 				Error:   "ITDog测速网站无法访问",
 				Message: fmt.Sprintf("无法连接到ITDog测速网站: %s", config.Domain),
 			}, nil
 		}
-
-		// 检查是否是元素未找到的错误
-		if strings.Contains(err.Error(), "waiting for selector") ||
-			strings.Contains(err.Error(), "not found") ||
-			strings.Contains(err.Error(), "not visible") {
-			// 返回特定的错误信息，指示元素未找到
-			return &ScreenshotResponse{
-				Success: false,
-				Error:   "无法获取测速内容",
-				Message: fmt.Sprintf("无法在itdog网站上找到%s元素，域名: %s", config.Description, config.Domain),
-			}, nil
-		}
-
-		// 其他类型的错误
 		return &ScreenshotResponse{
 			Success: false,
-			Error:   fmt.Sprintf("%s操作失败: %v", config.Description, err),
+			Error:   err.Error(),
 		}, nil
 	}
 
@@ -1674,9 +1750,7 @@ func performITDogScreenshotBase64(config ITDogScreenshotConfig, rdb *redis.Clien
 	}
 
 	// 缓存结果 (12小时)
-	if responseJSON, err := json.Marshal(response); err == nil {
-		rdb.Set(context.Background(), config.CacheKey, responseJSON, 12*time.Hour)
-	}
+	setJSONCache(context.Background(), rdb, config.CacheKey, response, 12*time.Hour)
 
 	log.Printf("%s完成: %s", config.Description, config.Domain)
 	return response, nil

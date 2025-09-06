@@ -7,7 +7,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -17,7 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"dmainwhoseek/utils"
+
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 )
 
 // WhoisXML Response 表示 WhoisXML API 响应结构
@@ -35,6 +37,16 @@ type WhoisXMLResponse struct {
 	} `json:"WhoisRecord"`
 }
 
+// getRedisFromGinContext 尝试从 Gin 上下文获取 Redis 客户端
+func getRedisFromGinContext(c *gin.Context) (*redis.Client, bool) {
+	if v, ok := c.Get("redis"); ok && v != nil {
+		if client, ok2 := v.(*redis.Client); ok2 && client != nil {
+			return client, true
+		}
+	}
+	return nil, false
+}
+
 func WhoisXMLQuery(c *gin.Context) {
 	domain, exists := c.Get("domain")
 	if !exists {
@@ -44,15 +56,27 @@ func WhoisXMLQuery(c *gin.Context) {
 	}
 
 	domainStr := domain.(string)
-	cacheKey := fmt.Sprintf("whois:%s", domainStr)
+	cacheKey := utils.BuildCacheKey("cache", "whois", utils.SanitizeDomain(domainStr))
 
 	// 检查缓存
-	if cachedData, err := rdb.Get(context.Background(), cacheKey).Result(); err == nil {
-		var response gin.H
-		if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
-			c.Header("X-Cache", "HIT")
-			c.JSON(200, response)
-			return
+	redisClient, hasRedis := getRedisFromGinContext(c)
+	activeRedis := func() *redis.Client {
+		if hasRedis {
+			return redisClient
+		}
+		if rdb != nil {
+			return rdb
+		}
+		return nil
+	}()
+	if activeRedis != nil {
+		if cachedData, err := activeRedis.Get(c.Request.Context(), cacheKey).Result(); err == nil {
+			var response gin.H
+			if err := json.Unmarshal([]byte(cachedData), &response); err == nil {
+				c.Header("X-Cache", "HIT")
+				c.JSON(200, response)
+				return
+			}
 		}
 	}
 
@@ -109,12 +133,14 @@ func WhoisXMLQuery(c *gin.Context) {
 	}
 
 	// 缓存结果
-	if resultJSON, err := json.Marshal(response); err == nil {
-		cacheDuration := REGISTERED_DOMAIN_CACHE_TIME
-		if isAvailable {
-			cacheDuration = UNREGISTERED_DOMAIN_CACHE_TIME
+	if activeRedis != nil {
+		if resultJSON, err := json.Marshal(response); err == nil {
+			cacheDuration := REGISTERED_DOMAIN_CACHE_TIME
+			if isAvailable {
+				cacheDuration = UNREGISTERED_DOMAIN_CACHE_TIME
+			}
+			activeRedis.Set(c.Request.Context(), cacheKey, resultJSON, cacheDuration)
 		}
-		rdb.Set(context.Background(), cacheKey, resultJSON, cacheDuration)
 	}
 
 	c.Header("X-Cache", "MISS")

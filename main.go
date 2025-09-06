@@ -75,6 +75,64 @@ func getPort(defaultPort string) string {
 	return port
 }
 
+// 组合对外访问URL（用于启动时提示）
+func buildPublicURL(listenPort string) string {
+	// 优先使用 PUBLIC_URL
+	if v := os.Getenv("PUBLIC_URL"); v != "" {
+		return v
+	}
+	proto := os.Getenv("PUBLIC_PROTO")
+	if proto == "" {
+		if os.Getenv("FORCE_HTTPS") == "true" {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	host := os.Getenv("PUBLIC_HOST")
+	if host == "" {
+		host = "localhost"
+	}
+	port := os.Getenv("PUBLIC_PORT")
+	if port == "" {
+		// listenPort 可能带":"，去掉前缀
+		port = strings.TrimPrefix(listenPort, ":")
+	}
+	// 如为默认端口则省略
+	omitPort := (proto == "http" && port == "80") || (proto == "https" && port == "443")
+	if omitPort {
+		return fmt.Sprintf("%s://%s", proto, host)
+	}
+	return fmt.Sprintf("%s://%s:%s", proto, host, port)
+}
+
+// 推断环境名，优先 APP_ENV/ENV，其次 GIN_MODE，默认 development
+func deriveEnvironment() string {
+	if v := os.Getenv("APP_ENV"); v != "" {
+		return v
+	}
+	if v := os.Getenv("ENV"); v != "" {
+		return v
+	}
+	switch strings.ToLower(os.Getenv("GIN_MODE")) {
+	case "release":
+		return "production"
+	case "test":
+		return "test"
+	default:
+		return "development"
+	}
+}
+
+// 统一的服务就绪横幅，增强可见性
+func printReadyBanner(publicURL, listenPort string) {
+	version := os.Getenv("APP_VERSION")
+	env := deriveEnvironment()
+	p := strings.TrimPrefix(listenPort, ":")
+	line := strings.Repeat("=", 64)
+	log.Printf("\n%s\n服务已就绪 (Whosee Server)\n- 版本: %s\n- 环境: %s\n- 监听端口: %s\n- 对外URL: %s\n%s\n", line, version, env, p, publicURL, line)
+}
+
 // 从环境变量中读取CORS配置
 func getCorsConfig() cors.Config {
 	// 从环境变量读取CORS允许的源，默认为开发环境常用地址
@@ -136,7 +194,7 @@ func main() {
 
 	// 初始化日志系统
 	setupLogger()
-	log.Printf("启动服务器，版本：%s，环境：%s", os.Getenv("APP_VERSION"), os.Getenv("APP_ENV"))
+	log.Printf("启动服务器，版本：%s，环境：%s", os.Getenv("APP_VERSION"), deriveEnvironment())
 
 	// 首先确保Chrome可用 - 在所有其他服务之前
 	log.Println("=== 开始Chrome预检查和下载 ===")
@@ -188,12 +246,16 @@ func main() {
 
 	// 异步初始化Chrome工具（完全非阻塞）
 	log.Println("正在后台异步初始化Chrome工具...")
+	port := getPort("8080") // 获取端口，以便在Chrome初始化失败时使用
 	go func() {
 		time.Sleep(3 * time.Second) // 延迟3秒启动，避免与主服务启动冲突
 
 		log.Println("[CHROME] 开始后台初始化Chrome工具...")
 		if err := utils.InitGlobalChromeUtil(); err != nil {
 			log.Printf("[CHROME] Chrome工具初始化失败: %v，截图功能不可用", err)
+			// 在所有启动检查结束后提示对外URL与监听端口
+			publicURL := buildPublicURL(port)
+			printReadyBanner(publicURL, port)
 			return
 		}
 
@@ -205,6 +267,10 @@ func main() {
 			log.Println("[CHROME] Chrome工具已就绪，启动健康监控")
 			chromeUtil.StartHealthMonitor()
 		}
+
+		// 在所有启动检查结束后提示对外URL与监听端口
+		publicURL := buildPublicURL(port)
+		printReadyBanner(publicURL, port)
 	}()
 
 	// 创建Gin引擎
@@ -229,7 +295,6 @@ func main() {
 	routes.RegisterAPIRoutes(r, serviceContainer)
 
 	// 创建HTTP服务器，配置超时参数
-	port := getPort("8080")
 	srv := &http.Server{
 		Addr:           port,
 		Handler:        r,
@@ -271,7 +336,7 @@ func main() {
 	}()
 
 	// 启动服务
-	log.Printf("服务器启动在端口%s，环境：%s", port, os.Getenv("APP_ENV"))
+	log.Printf("服务器启动在端口%s，环境：%s", port, deriveEnvironment())
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("服务器启动失败: %v", err)
 	}

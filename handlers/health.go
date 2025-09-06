@@ -7,11 +7,46 @@ package handlers
 
 import (
 	"dmainwhoseek/utils"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+// deriveBackendURL 根据请求头与TLS状态推断后端URL（含协议与Host）
+func deriveBackendURL(c *gin.Context) string {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if v := c.GetHeader("X-Forwarded-Proto"); v != "" {
+		parts := strings.Split(v, ",")
+		if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+			scheme = strings.TrimSpace(parts[0])
+		}
+	}
+
+	host := c.Request.Host
+	if v := c.GetHeader("X-Forwarded-Host"); v != "" {
+		parts := strings.Split(v, ",")
+		if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+			host = strings.TrimSpace(parts[0])
+		}
+	}
+	// 如果未通过 X-Forwarded-Host 指定端口，尝试使用 X-Forwarded-Port 补充端口
+	if !strings.Contains(host, ":") {
+		if p := c.GetHeader("X-Forwarded-Port"); p != "" {
+			port := strings.TrimSpace(strings.Split(p, ",")[0])
+			if port != "" {
+				host = host + ":" + port
+			}
+		}
+	}
+
+	return scheme + "://" + host
+}
 
 // HealthCheckHandler 健康检查API处理程序
 func HealthCheckHandler(healthChecker interface{}) gin.HandlerFunc {
@@ -57,6 +92,30 @@ func HealthCheckHandler(healthChecker interface{}) gin.HandlerFunc {
 				response["status"] = overallStatus
 			}
 		}
+
+		// 添加当前后端URL提示
+		backendURL := deriveBackendURL(c)
+		backendPort := func() string {
+			u, err := url.Parse(backendURL)
+			if err == nil {
+				if p := u.Port(); p != "" {
+					return p
+				}
+				if u.Scheme == "https" {
+					return "443"
+				}
+				return "80"
+			}
+			return ""
+		}()
+		listenPort := os.Getenv("PORT")
+		if listenPort == "" {
+			listenPort = "8080"
+		}
+		response["backendUrl"] = backendURL
+		response["backendPort"] = backendPort
+		response["listenPort"] = listenPort
+		healthLogger.Printf("健康检查返回后端URL: %s, 客户端端口: %s, 监听端口: %s", backendURL, backendPort, listenPort)
 
 		// 返回健康状态
 		c.JSON(200, response)

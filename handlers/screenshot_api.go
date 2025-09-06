@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"dmainwhoseek/utils"
+
 	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -67,7 +69,7 @@ func ScreenshotBase64Handler(c *gin.Context) {
 	startTime := time.Now()
 
 	// 为域名构建缓存键
-	cacheKey := fmt.Sprintf("screenshot:base64:%s", domainStr)
+	cacheKey := utils.BuildCacheKey("cache", "screenshot", "base64", utils.SanitizeDomain(domainStr))
 
 	// 检查缓存
 	cachedData, err := redisClientPtr.Get(context.Background(), cacheKey).Result()
@@ -213,7 +215,7 @@ func ITDogBase64Handler(c *gin.Context) {
 	startTime := time.Now()
 
 	// 为域名构建缓存键
-	cacheKey := fmt.Sprintf("itdog_screenshot_base64:%s", domainStr)
+	cacheKey := utils.BuildCacheKey("cache", "itdog", "map", "base64", utils.SanitizeDomain(domainStr))
 
 	// 检查缓存
 	cachedData, err := redisClientPtr.Get(context.Background(), cacheKey).Result()

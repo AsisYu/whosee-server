@@ -142,15 +142,31 @@ func (p *WhoisXMLProvider) queryAPI(domain string) (*types.WhoisResponse, error)
 		log.Printf("使用WhoisXML API密钥(长度不足): %s...", apiKey)
 	}
 
-	apiURL := fmt.Sprintf("https://www.whoisxmlapi.com/whoisserver/WhoisService?apiKey=%s&domainName=%s&outputFormat=JSON",
-		url.QueryEscape(apiKey),
-		url.QueryEscape(domain))
-
+	apiURL := p.buildURL(apiKey, domain)
 	log.Printf("请求WhoisXML: %s", strings.Replace(apiURL, apiKey, "[HIDDEN]", 1))
 
+	body, _, err := p.doRequestWithRetries(apiURL, domain)
+	if err != nil {
+		return nil, err
+	}
+
+	return p.parseWhoisXMLResponse(body)
+}
+
+// buildURL 组装请求URL（独立，便于测试与复用）
+func (p *WhoisXMLProvider) buildURL(apiKey, domain string) string {
+	return fmt.Sprintf(
+		"https://www.whoisxmlapi.com/whoisserver/WhoisService?apiKey=%s&domainName=%s&outputFormat=JSON",
+		url.QueryEscape(apiKey), url.QueryEscape(domain),
+	)
+}
+
+// doRequestWithRetries 处理重试与错误分类，返回响应体和状态码
+func (p *WhoisXMLProvider) doRequestWithRetries(apiURL, domain string) ([]byte, int, error) {
 	var (
-		resp *http.Response
-		body []byte
+		resp       *http.Response
+		body       []byte
+		statusCode int
 	)
 
 	maxRetries := 3
@@ -164,11 +180,10 @@ func (p *WhoisXMLProvider) queryAPI(domain string) (*types.WhoisResponse, error)
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-
 		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 		if err != nil {
 			cancel()
-			return nil, fmt.Errorf("创建请求失败: %v", err)
+			return nil, 0, fmt.Errorf("创建请求失败: %v", err)
 		}
 
 		req.Header.Set("User-Agent", "DomainWhoseek/1.0")
@@ -184,19 +199,17 @@ func (p *WhoisXMLProvider) queryAPI(domain string) (*types.WhoisResponse, error)
 		if err != nil {
 			errorType := p.classifyError(err, 0)
 			log.Printf("WhoisXML API 请求失败 (%s) (重试 %d/%d): %v", errorType, attempt+1, maxRetries+1, err)
-
 			if errorType == "connection" || errorType == "network" {
 				retryDelay = time.Duration(float64(retryDelay) * 2)
 			}
 			continue
 		}
-
 		defer resp.Body.Close()
 
-		log.Printf("WhoisXML API 响应状态码: %d (重试 %d/%d)", resp.StatusCode, attempt+1, maxRetries+1)
+		statusCode = resp.StatusCode
+		log.Printf("WhoisXML API 响应状态码: %d (重试 %d/%d)", statusCode, attempt+1, maxRetries+1)
 
-		errorType := p.classifyError(nil, resp.StatusCode)
-
+		errorType := p.classifyError(nil, statusCode)
 		switch errorType {
 		case "rate_limit":
 			log.Printf("WhoisXML API 返回速率限制 (429)，将重试")
@@ -206,154 +219,112 @@ func (p *WhoisXMLProvider) queryAPI(domain string) (*types.WhoisResponse, error)
 			log.Printf("WhoisXML API 返回服务器错误 (5xx)，将重试")
 			continue
 		case "client":
-			if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			if statusCode == 401 || statusCode == 403 {
 				log.Printf("WhoisXML API 返回客户端错误 (401/403)，将重试")
 				continue
 			}
-			return nil, fmt.Errorf("WhoisXML API 返回客户端错误状态码: %d", resp.StatusCode)
+			return nil, statusCode, fmt.Errorf("WhoisXML API 返回客户端错误状态码: %d", statusCode)
 		}
 
 		contentType := resp.Header.Get("Content-Type")
 		if !strings.Contains(contentType, "application/json") {
 			body, _ := ioutil.ReadAll(resp.Body)
-			log.Printf("WhoisXML API 返回非JSON格式: %s, 响应: %s (重试 %d/%d)",
-				contentType, utils.TruncateString(string(body), 200), attempt+1, maxRetries+1)
+			log.Printf("WhoisXML API 返回非JSON格式: %s, 响应: %s (重试 %d/%d)", contentType, utils.TruncateString(string(body), 200), attempt+1, maxRetries+1)
 			continue
 		}
 
-		body, err = ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("读取响应失败 (重试 %d/%d): %v", attempt+1, maxRetries+1, err)
-
-			// 如果是上下文取消错误，但状态码正常，尝试重新读取不使用上下文
-			if resp.StatusCode == http.StatusOK && strings.Contains(err.Error(), "context canceled") {
-				log.Printf("发现上下文取消错误，尝试不使用上下文直接读取...")
-
-				// 创建新的HTTP 请求，不使用上下文，增加超时时间
-				directClient := &http.Client{Timeout: 30 * time.Second} // 增加到30秒
+		var readErr error
+		body, readErr = ioutil.ReadAll(resp.Body)
+		if readErr != nil {
+			log.Printf("读取响应失败 (重试 %d/%d): %v", attempt+1, maxRetries+1, readErr)
+			if statusCode == http.StatusOK && strings.Contains(readErr.Error(), "context canceled") {
+				// 直接请求兜底
+				directClient := &http.Client{Timeout: 30 * time.Second}
 				directReq, directErr := http.NewRequest("GET", apiURL, nil)
 				if directErr != nil {
 					log.Printf("创建直接请求失败: %v", directErr)
 					continue
 				}
-
-				// 添加头部
 				directReq.Header.Set("User-Agent", "DomainWhoseek/1.0")
 				directReq.Header.Set("Accept", "application/json")
-
-				// 记录开始尝试直接请求
-				log.Printf("开始直接请求，不使用原上下文，域名: %s", domain)
-				directReqStart := time.Now()
-
 				directResp, directErr := directClient.Do(directReq)
-				directReqDuration := time.Since(directReqStart)
-
-				if directErr != nil {
-					log.Printf("直接请求失败: %v (耗时: %v)", directErr, directReqDuration)
+				if directErr != nil || directResp.StatusCode != http.StatusOK {
+					if directResp != nil {
+						defer directResp.Body.Close()
+					}
 					continue
 				}
 				defer directResp.Body.Close()
-
-				// 检查响应状态码
-				if directResp.StatusCode != http.StatusOK {
-					log.Printf("直接请求返回非200状态码: %d (耗时: %v)", directResp.StatusCode, directReqDuration)
+				body, readErr = ioutil.ReadAll(directResp.Body)
+				if readErr != nil {
 					continue
 				}
-
-				log.Printf("直接请求成功，状态码: %d，开始读取响应体 (耗时: %v)", directResp.StatusCode, directReqDuration)
-
-				// 为读取操作单独设置超时
-				readCtx, readCancel := context.WithTimeout(context.Background(), 20*time.Second)
-				defer readCancel()
-
-				// 创建带超时的reader
-				readErrChan := make(chan error, 1)
-				bodyChan := make(chan []byte, 1)
-
-				go func() {
-					bodyBytes, readErr := ioutil.ReadAll(directResp.Body)
-					if readErr != nil {
-						readErrChan <- readErr
-						return
-					}
-					bodyChan <- bodyBytes
-				}()
-
-				// 等待读取完成或超时
-				select {
-				case body = <-bodyChan:
-					log.Printf("直接请求读取成功，获取响应内容长度: %d", len(body))
-				case readErr := <-readErrChan:
-					log.Printf("直接请求读取失败: %v", readErr)
-					continue
-				case <-readCtx.Done():
-					log.Printf("直接请求读取超时")
-					continue
-				}
+				statusCode = directResp.StatusCode
 			} else {
 				continue
 			}
 		}
 
-		var whoisResp WhoisXMLResponse
-		err = json.Unmarshal(body, &whoisResp)
-		if err != nil {
-			log.Printf("解析响应失败 (重试 %d/%d): %v, 响应: %s", attempt+1, maxRetries+1, err, utils.TruncateString(string(body), 200))
-			continue
-		}
-
-		if whoisResp.WhoisRecord.DomainName == "" {
-			log.Printf("响应验证失败：域名为空 (重试 %d/%d)", attempt+1, maxRetries+1)
-			continue
-		}
-
-		statusStr := whoisResp.WhoisRecord.Status
-		if statusStr == "" {
-			statusStr = whoisResp.WhoisRecord.RegistryData.Status
-		}
-		statuses := strings.Fields(statusStr)
-
-		createdDate := whoisResp.WhoisRecord.CreatedDate
-		if createdDate == "" {
-			createdDate = whoisResp.WhoisRecord.RegistryData.CreatedDate
-		}
-
-		expiresDate := whoisResp.WhoisRecord.ExpiresDate
-		if expiresDate == "" {
-			expiresDate = whoisResp.WhoisRecord.RegistryData.ExpiresDate
-		}
-
-		updatedDate := whoisResp.WhoisRecord.UpdatedDate
-		if updatedDate == "" {
-			updatedDate = whoisResp.WhoisRecord.RegistryData.UpdatedDate
-		}
-
-		var nameServers []string
-		if len(whoisResp.WhoisRecord.NameServers.HostNames) > 0 {
-			nameServers = whoisResp.WhoisRecord.NameServers.HostNames
-		} else if len(whoisResp.WhoisRecord.RegistryData.NameServers.HostNames) > 0 {
-			nameServers = whoisResp.WhoisRecord.RegistryData.NameServers.HostNames
-		}
-
-		result := &types.WhoisResponse{
-			Available:   false,
-			Domain:      whoisResp.WhoisRecord.DomainName,
-			Registrar:   whoisResp.WhoisRecord.RegistrarName,
-			CreateDate:  createdDate,
-			ExpiryDate:  expiresDate,
-			Status:      statuses,
-			UpdateDate:  updatedDate,
-			NameServers: nameServers,
-		}
-
-		log.Printf("WhoisXML 查询结果 - 域名: %s, 注册商: %s, 创建日期: %s, 到期日期: %s",
-			result.Domain,
-			result.Registrar,
-			result.CreateDate,
-			result.ExpiryDate)
-
-		return result, nil
+		return body, statusCode, nil
 	}
 
-	return nil, fmt.Errorf("WhoisXML API 请求失败，已重试 %d 次", maxRetries)
+	return nil, statusCode, fmt.Errorf("WhoisXML API 请求失败，已重试 %d 次", maxRetries)
+}
+
+// parseWhoisXMLResponse 解析并转为统一响应
+func (p *WhoisXMLProvider) parseWhoisXMLResponse(body []byte) (*types.WhoisResponse, error) {
+	var whoisResp WhoisXMLResponse
+	if err := json.Unmarshal(body, &whoisResp); err != nil {
+		return nil, fmt.Errorf("解析响应失败: %v", err)
+	}
+	if whoisResp.WhoisRecord.DomainName == "" {
+		return nil, fmt.Errorf("响应验证失败：域名为空")
+	}
+
+	statusStr := whoisResp.WhoisRecord.Status
+	if statusStr == "" {
+		statusStr = whoisResp.WhoisRecord.RegistryData.Status
+	}
+	statuses := strings.Fields(statusStr)
+
+	createdDate := whoisResp.WhoisRecord.CreatedDate
+	if createdDate == "" {
+		createdDate = whoisResp.WhoisRecord.RegistryData.CreatedDate
+	}
+
+	expiresDate := whoisResp.WhoisRecord.ExpiresDate
+	if expiresDate == "" {
+		expiresDate = whoisResp.WhoisRecord.RegistryData.ExpiresDate
+	}
+
+	updatedDate := whoisResp.WhoisRecord.UpdatedDate
+	if updatedDate == "" {
+		updatedDate = whoisResp.WhoisRecord.RegistryData.UpdatedDate
+	}
+
+	var nameServers []string
+	if len(whoisResp.WhoisRecord.NameServers.HostNames) > 0 {
+		nameServers = whoisResp.WhoisRecord.NameServers.HostNames
+	} else if len(whoisResp.WhoisRecord.RegistryData.NameServers.HostNames) > 0 {
+		nameServers = whoisResp.WhoisRecord.RegistryData.NameServers.HostNames
+	}
+
+	result := &types.WhoisResponse{
+		Available:   false,
+		Domain:      whoisResp.WhoisRecord.DomainName,
+		Registrar:   whoisResp.WhoisRecord.RegistrarName,
+		CreateDate:  createdDate,
+		ExpiryDate:  expiresDate,
+		Status:      statuses,
+		UpdateDate:  updatedDate,
+		NameServers: nameServers,
+	}
+
+	log.Printf("WhoisXML 查询结果 - 域名: %s, 注册商: %s, 创建日期: %s, 到期日期: %s",
+		result.Domain,
+		result.Registrar,
+		result.CreateDate,
+		result.ExpiryDate)
+
+	return result, nil
 }
