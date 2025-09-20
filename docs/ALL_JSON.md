@@ -118,17 +118,6 @@
 }
 ```
 
-### RDAP vs WHOIS 对比
-
-| 特性 | RDAP | 传统WHOIS |
-|------|------|-----------|
-| 数据格式 | 标准化JSON | 非结构化文本 |
-| 国际化支持 | 完整支持 | 有限支持 |
-| 协议设计 | RESTful API | TCP端口43 |
-| 数据标准化 | ICANN标准 | 各注册商不统一 |
-| 解析难度 | 简单 | 复杂 |
-| 推荐程度 | 🌟🌟🌟🌟🌟 | 🌟🌟🌟 |
-
 ## DNS查询 API
 
 **端点**: `/api/v1/dns` 或 `/api/v1/dns/:domain`  
@@ -565,10 +554,10 @@
 }
 ```
 
-### 🔍 健康检查说明
+###  健康检查说明
 
 - **WHOIS服务**: 包含4个提供商的健康状态
-  - `IANA-RDAP`: 基于RDAP协议的现代化查询服务 ⭐
+  - `IANA-RDAP`: 基于RDAP协议的现代化查询服务 
   - `IANA-WHOIS`: 基于TCP端口43的传统WHOIS查询
   - `WhoisFreaks`: 商业WHOIS API服务
   - `WhoisXML`: 商业WHOIS API服务
@@ -597,30 +586,30 @@
 - `FORBIDDEN` (403): 访问被禁止（IP白名单限制）
 - `TOO_MANY_REQUESTS` (429): 请求频率过高
 
-#### 📋 请求参数错误
+####  请求参数错误
 - `MISSING_PARAMETER` (400): 缺少必要的参数（如domain参数）
 - `INVALID_DOMAIN` (400): 域名格式无效
 - `REQUEST_ENTITY_TOO_LARGE` (413): 请求实体过大
 
-#### ⚙️ 服务状态错误
+####  服务状态错误
 - `SERVICE_BUSY` (503): 服务忙碌，请稍后重试
 - `SERVICE_UNAVAILABLE` (503): 服务不可用
 - `TIMEOUT` (504): 请求处理超时
 
-#### 🔍 查询相关错误
+####  查询相关错误
 - `QUERY_ERROR` (500): 查询过程中发生错误
 - `SCREENSHOT_ERROR` (500): 截图过程中发生错误
 - `ITDOG_ERROR` (500): ITDog测试过程中发生错误
 - `RDAP_ERROR` (500): RDAP查询过程中发生错误
 
-### 🔧 错误处理建议
+###  错误处理建议
 
 1. **401/403错误**: 检查JWT令牌是否有效，必要时重新获取
 2. **429错误**: 等待一段时间后重试，遵守API限流规则
 3. **503/504错误**: 服务器临时问题，建议指数退避重试
 4. **500错误**: 服务器内部错误，检查请求参数或联系技术支持
 
-## 📝 完整使用示例
+##  完整使用示例
 
 ### JavaScript/Node.js 示例
 
@@ -739,7 +728,7 @@ curl -X GET "http://localhost:3900/api/v1/dns/google.com" \
   -H "Content-Type: application/json" | jq '.'
 ```
 
-## 📊 性能优化建议
+## 性能优化建议
 
 1. **令牌复用**: 在30秒内复用同一个令牌（但每个令牌只能用一次）
 2. **并发控制**: 避免同时发送过多请求，遵守限流规则
@@ -749,5 +738,3 @@ curl -X GET "http://localhost:3900/api/v1/dns/google.com" \
 
 ---
 
-📧 **技术支持**: 如有问题请联系 [AsisYu](https://github.com/AsisYu)  
-🌐 **项目地址**: [https://github.com/AsisYu/whosee-whois](https://github.com/AsisYu/whosee-whois)

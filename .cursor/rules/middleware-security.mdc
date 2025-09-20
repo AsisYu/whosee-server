@@ -1,0 +1,131 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Middleware and Security System
+
+## Middleware Architecture
+The application uses a comprehensive middleware system for cross-cutting concerns. All middleware is organized in the [middleware/](mdc:server/middleware) directory.
+
+## Security Middleware Chain
+
+### Authentication & Authorization
+- **Auth Middleware**: [auth.go](mdc:server/middleware/auth.go)
+  - JWT token validation
+  - API key authentication
+  - Nonce-based security
+  - IP binding for tokens
+
+### IP Whitelisting
+- **IP Whitelist**: [ip_whitelist.go](mdc:server/middleware/ip_whitelist.go)
+  - Configurable trusted IP lists
+  - Development mode bypass
+  - Redis-cached IP validation
+  - Strict/permissive modes
+
+### CORS Configuration
+- **CORS Middleware**: [cors.go](mdc:server/middleware/cors.go)
+  - Configurable origin policies
+  - Method and header restrictions
+  - Credentials handling
+  - Preflight request support
+
+### Security Headers
+- **Security Middleware**: [security.go](mdc:server/middleware/security.go)
+  - Content Security Policy (CSP)
+  - HTTP Strict Transport Security (HSTS)
+  - X-Frame-Options
+  - X-XSS-Protection
+  - Content-Type-Options
+
+## Performance & Reliability Middleware
+
+### Rate Limiting
+- **Rate Limiter**: [ratelimit.go](mdc:server/middleware/ratelimit.go)
+  - Per-IP rate limiting
+  - Redis-based distributed limiting
+  - Sliding window algorithm
+  - Configurable limits and bursts
+
+### Request Size Limiting
+- **Size Limiter**: [sizelimit.go](mdc:server/middleware/sizelimit.go)
+  - Configurable body size limits
+  - Method-specific exemptions
+  - Path-based exclusions
+
+### Logging & Monitoring
+- **Enhanced Logging**: [logging.go](mdc:server/middleware/logging.go)
+  - Structured JSON logging
+  - Request/response metadata
+  - Performance metrics
+  - Error tracking
+
+- **Monitoring**: [monitoring.go](mdc:server/middleware/monitoring.go)
+  - Redis-based metrics collection
+  - Request statistics
+  - Performance monitoring
+
+## Validation Middleware
+
+### Request Validation
+- **Validation**: [validation.go](mdc:server/middleware/validation.go)
+  - Input sanitization
+  - Domain format validation
+  - Parameter validation
+
+- **JSON Validator**: [validator.go](mdc:server/middleware/validator.go)
+  - JSON body validation
+  - Schema enforcement
+  - Type checking
+
+### Error Handling
+- **Error Handler**: [error.go](mdc:server/middleware/error.go)
+  - Centralized error processing
+  - Consistent error responses
+  - Error logging and metrics
+
+## Service Injection
+- **Service Middleware**: [service.go](mdc:server/middleware/service.go)
+  - Dependency injection
+  - Service container access
+  - Context population
+
+## Configuration Examples
+
+### Setting up Authentication
+```go
+// JWT + API Key authentication
+router.Use(middleware.AuthRequired(redisClient))
+```
+
+### Rate Limiting Configuration
+```go
+// 100 requests per minute per IP
+router.Use(middleware.RateLimitWithConfig(middleware.RateLimitConfig{
+    Rate:   100,
+    Period: time.Minute,
+    Burst:  10,
+}))
+```
+
+### Security Headers
+```go
+// Enable all security headers
+router.Use(middleware.Security())
+```
+
+## Middleware Chain Order
+1. **CORS** - Handle preflight requests
+2. **Security** - Apply security headers
+3. **Logging** - Request logging start
+4. **Rate Limiting** - Prevent abuse
+5. **Size Limiting** - Prevent large payloads
+6. **Authentication** - Verify identity
+7. **IP Whitelist** - Access control
+8. **Validation** - Input validation
+9. **Service Injection** - Provide dependencies
+10. **Error Handling** - Catch and format errors
+
+The middleware system provides a robust foundation for secure, performant, and observable API operations.
+

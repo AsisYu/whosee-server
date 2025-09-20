@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  # Redis服务
+  redis:
+    image: redis:7-alpine
+    container_name: whosee-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - whosee-network
+
+  # Whosee服务器
+  whosee-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: whosee-server
+    restart: unless-stopped
+    ports:
+      - "3900:3900"
+    environment:
+      # 基础配置
+      - PORT=3900
+      - GIN_MODE=release
+
+      # Redis配置
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+
+      # API密钥配置
+      - WHOISXML_API_KEY=${WHOISXML_API_KEY}
+      - WHOISFREAKS_API_KEY=${WHOISFREAKS_API_KEY}
+      - API_KEY=${API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+
+      # 安全配置
+      - DISABLE_API_SECURITY=${DISABLE_API_SECURITY:-false}
+      - IP_WHITELIST_STRICT_MODE=${IP_WHITELIST_STRICT_MODE:-false}
+      - API_DEV_MODE=${API_DEV_MODE:-false}
+      - TRUSTED_IPS=${TRUSTED_IPS:-}
+
+      # Chrome配置
+      - CHROME_MODE=${CHROME_MODE:-auto}
+
+      # 健康检查配置
+      - HEALTH_CHECK_INTERVAL_DAYS=${HEALTH_CHECK_INTERVAL_DAYS:-1}
+      - HEALTH_LOG_SEPARATE=${HEALTH_LOG_SEPARATE:-false}
+      - HEALTH_LOG_SILENT=${HEALTH_LOG_SILENT:-false}
+    volumes:
+      # 日志持久化
+      - ./logs:/app/logs
+      # 静态文件持久化（截图等）
+      - ./static:/app/static
+      # Chrome数据目录
+      - chrome_data:/app/chrome_runtime
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3900/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - whosee-network
+
+  # Nginx反向代理（可选）
+  nginx:
+    image: nginx:alpine
+    container_name: whosee-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./static:/var/www/static:ro
+      # SSL证书（如果有）
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - whosee-server
+    networks:
+      - whosee-network
+    profiles:
+      - production
+
+volumes:
+  redis_data:
+    driver: local
+  chrome_data:
+    driver: local
+
+networks:
+  whosee-network:
+    driver: bridge

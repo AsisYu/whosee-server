@@ -471,56 +471,29 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 
 	var err error
 	err = sb.ScreenshotBreaker.Execute(func() error {
-		// 优先使用全局Chrome工具
-		chromeUtil := utils.GetGlobalChromeUtil()
-		var ctx context.Context
-		var cancel context.CancelFunc
-		var timeoutCancel context.CancelFunc
+		// 临时绕过Chrome工具，直接使用chromedp进行测试
+		log.Printf("[DEBUG] 绕过Chrome工具，直接使用chromedp进行截图")
 
-		if chromeUtil != nil {
-			// 使用全局Chrome工具（已包含超时）
-			globalCtx, globalCancel, err := chromeUtil.GetContext(45 * time.Second)
-			if err != nil {
-				log.Printf("获取全局Chrome上下文失败: %v，回退到chromedp.NewContext", err)
-				// 回退到chromedp.NewContext
-				ctx, cancel = chromedp.NewContext(
-					context.Background(),
-					chromedp.WithLogf(log.Printf),
-				)
-				// 为回退方案设置超时
-				ctx, timeoutCancel = context.WithTimeout(ctx, 45*time.Second)
-				defer timeoutCancel()
-			} else {
-				ctx = globalCtx
-				cancel = globalCancel
-			}
-		} else {
-			// 回退到chromedp.NewContext
-			ctx, cancel = chromedp.NewContext(
-				context.Background(),
-				chromedp.WithLogf(log.Printf),
-			)
-			// 为回退方案设置超时
-			ctx, timeoutCancel = context.WithTimeout(ctx, 45*time.Second)
-			defer timeoutCancel()
-		}
+		// 创建上下文
+		tempCtx, tempCancel := chromedp.NewContext(context.Background())
+		defer tempCancel()
 
-		if cancel != nil {
-			defer cancel()
-		}
+		// 设置超时
+		tempCtx, timeoutCancel := context.WithTimeout(tempCtx, 90*time.Second)
+		defer timeoutCancel()
 
 		// 截图数据
 		var buf []byte
 
 		// 执行截图
-		err := chromedp.Run(ctx,
+		err := chromedp.Run(tempCtx,
 			chromedp.Navigate(fmt.Sprintf("https://%s", domain)),
-			chromedp.Sleep(5*time.Second),
+			chromedp.Sleep(8*time.Second),
 			chromedp.CaptureScreenshot(&buf),
 		)
 
 		if err != nil {
-			log.Printf("截图失败: %v", err)
+			log.Printf("[DEBUG] 直接使用chromedp截图失败: %v", err)
 			return err
 		}
 
@@ -530,6 +503,7 @@ func Screenshot(c *gin.Context, rdb *redis.Client) {
 			return err
 		}
 
+		log.Printf("[DEBUG] 直接使用chromedp截图成功，大小: %d bytes", len(buf))
 		return nil
 	})
 

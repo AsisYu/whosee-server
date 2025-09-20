@@ -59,17 +59,18 @@ COPY --from=builder /app/.env.example /app/.env
 RUN chown -R appuser:appgroup /app
 
 # 暴露端口
-EXPOSE 3000
+EXPOSE 3900
 
 # 设置环境变量 - Chrome优化
 ENV GIN_MODE=release \
-    PORT=3000 \
+    PORT=3900 \
     REDIS_ADDR=redis:6379 \
     CHROME_BIN=/usr/bin/chromium-browser \
     CHROME_NO_SANDBOX=true \
     CHROME_DISABLE_GPU=true \
     CHROME_DISABLE_DEV_SHM=true \
     CHROME_USER_DATA_DIR=/tmp/chrome-user-data \
+    CHROME_MODE=auto \
     # 内存和性能优化
     GOMEMLIMIT=800MiB \
     GOGC=100
@@ -79,7 +80,7 @@ USER appuser
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3900/api/health || exit 1
 
 # 运行应用
 CMD ["/app/main"]

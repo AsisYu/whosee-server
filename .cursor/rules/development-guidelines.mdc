@@ -1,0 +1,200 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Development Guidelines
+
+## Code Organization Principles
+
+### Package Structure
+- **handlers/**: HTTP request handlers - thin layer that delegates to services
+- **services/**: Business logic and core functionality
+- **middleware/**: Cross-cutting concerns (auth, logging, etc.)
+- **providers/**: External API integrations
+- **types/**: Shared data structures and interfaces
+- **utils/**: Utility functions and helpers
+
+### Naming Conventions
+- **Files**: Use snake_case for file names
+- **Types**: Use PascalCase for exported types
+- **Functions**: Use camelCase for private, PascalCase for exported
+- **Constants**: Use UPPER_CASE for constants
+
+## Architecture Patterns
+
+### Service Container Pattern
+All services are managed through the service container in [container.go](mdc:server/services/container.go). When adding new services:
+
+1. Add service to ServiceContainer struct
+2. Initialize in NewServiceContainer()
+3. Provide shutdown method if needed
+
+### Provider Pattern
+External API providers implement the interface defined in [types/whois.go](mdc:server/types/whois.go):
+
+```go
+type WhoisProvider interface {
+    Query(domain string) (*WhoisResponse, error, bool)
+    Name() string
+}
+```
+
+### Circuit Breaker Pattern
+Long-running or external operations should use circuit breakers from [service_breakers.go](mdc:server/services/service_breakers.go).
+
+## Adding New Features
+
+### New API Endpoint
+1. **Define Route**: Add to [routes.go](mdc:server/routes/routes.go)
+2. **Create Handler**: Implement in appropriate handler file
+3. **Add Service Logic**: Create or extend service in [services/](mdc:server/services)
+4. **Add Types**: Define request/response types in [types/](mdc:server/types)
+5. **Add Tests**: Create comprehensive test coverage
+
+### New External Provider
+1. **Implement Interface**: Create provider in [providers/](mdc:server/providers)
+2. **Add to Manager**: Register in WhoisManager initialization
+3. **Configure**: Add necessary environment variables
+4. **Test**: Ensure error handling and failover work
+
+### New Middleware
+1. **Create File**: Add to [middleware/](mdc:server/middleware)
+2. **Follow Pattern**: Use configuration structs for flexibility
+3. **Chain Position**: Consider middleware order in route setup
+4. **Document**: Update middleware documentation
+
+## Error Handling Standards
+
+### Error Response Format
+Use consistent error responses via [api.go](mdc:server/utils/api.go):
+
+```go
+utils.ErrorResponse(c, statusCode, "ERROR_CODE", "Human readable message")
+```
+
+### Error Logging
+- Log errors with context and structured data
+- Include request IDs for traceability
+- Use appropriate log levels
+
+### Circuit Breaker Integration
+For external services, wrap calls with circuit breakers:
+
+```go
+err := circuitBreaker.Execute(func() error {
+    // External service call
+    return externalAPICall()
+})
+```
+
+## Caching Strategy
+
+### Cache Keys
+Use consistent naming patterns:
+- `whois:{domain}` - WHOIS data
+- `dns:{domain}` - DNS records
+- `screenshot:{domain}` - Screenshot URLs
+- `itdog_screenshot:{domain}` - ITDog results
+
+### Cache Duration
+Different data types have different cache durations:
+- WHOIS: Based on domain expiry (registered vs available)
+- DNS: 30 minutes
+- Screenshots: 24 hours
+- Health checks: 5 minutes
+
+### Cache Implementation
+Use Redis through the service container. Handle cache misses gracefully and implement cache warming where appropriate.
+
+## Testing Guidelines
+
+### Unit Tests
+- Test individual functions and methods
+- Mock external dependencies
+- Focus on business logic
+
+### Integration Tests
+- Test service interactions
+- Use test Redis instance
+- Test middleware chains
+
+### Health Check Testing
+- Verify all services respond correctly
+- Test circuit breaker behavior
+- Validate error scenarios
+
+## Performance Considerations
+
+### Async Processing
+Use worker pools for long-running tasks:
+
+```go
+pool.SubmitWithContext(ctx, func() {
+    // Long-running task
+})
+```
+
+### Memory Management
+- Clean up resources properly
+- Use context cancellation
+- Monitor goroutine leaks
+
+### Rate Limiting
+- Implement appropriate rate limits
+- Use Redis for distributed limiting
+- Provide clear error messages
+
+## Security Best Practices
+
+### Input Validation
+- Validate all user inputs
+- Sanitize domain names
+- Check parameter formats
+
+### Authentication
+- Use JWT tokens with proper expiration
+- Implement API key validation
+- Support IP whitelisting
+
+### CORS Configuration
+- Configure appropriate origins
+- Limit exposed headers
+- Handle preflight requests
+
+## Monitoring and Observability
+
+### Logging Standards
+- Use structured JSON logging
+- Include request context
+- Log performance metrics
+
+### Health Checks
+- Implement comprehensive health checks
+- Monitor external dependencies
+- Provide detailed status information
+
+### Metrics Collection
+- Track request rates and response times
+- Monitor cache hit rates
+- Alert on circuit breaker state changes
+
+## Documentation Requirements
+
+### Code Documentation
+- Document all exported functions and types
+- Include usage examples
+- Explain complex algorithms
+
+### API Documentation
+- Document all endpoints
+- Provide request/response examples
+- Include error codes and meanings
+
+### README Updates
+- Keep component README files current
+- Document configuration options
+- Provide troubleshooting guides
+
+Following these guidelines ensures consistency, maintainability, and reliability across the codebase.
+

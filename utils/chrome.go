@@ -499,6 +499,12 @@ func (cu *ChromeUtil) GetContext(timeout time.Duration) (context.Context, contex
 	// 创建任务上下文
 	taskCtx, cancel := context.WithTimeout(cu.ctx, timeout)
 
+	// 更新使用时间戳
+	cu.statsLock.Lock()
+	cu.lastUsed = time.Now()
+	cu.usageCount++
+	cu.statsLock.Unlock()
+
 	// 包装cancel函数，确保释放信号量
 	wrappedCancel := func() {
 		cancel()
@@ -513,17 +519,34 @@ func (cu *ChromeUtil) IsHealthy() bool {
 	cu.mu.RLock()
 	defer cu.mu.RUnlock()
 
-	if !cu.isRunning || cu.ctx == nil {
+	if !cu.isRunning {
 		return false
 	}
 
-	// 快速上下文检查
+	// 如果主上下文不存在，说明Chrome没有正确初始化
+	if cu.ctx == nil {
+		return false
+	}
+
+	// 首先检查上下文是否被取消
 	select {
 	case <-cu.ctx.Done():
+		// 上下文已被取消，Chrome不健康
+		log.Printf("[CHROME-UTIL] 上下文已取消，Chrome不健康: %v", cu.ctx.Err())
 		return false
 	default:
-		return true
+		// 上下文正常，继续检查
 	}
+
+	// 对于自动模式，在上下文正常的前提下采用更宽松的健康检查策略
+	if cu.config.Mode == ChromeModeAuto {
+		// 如果Chrome最近被使用过（5分钟内）且上下文正常，认为是健康的
+		if time.Since(cu.lastUsed) < 5*time.Minute {
+			return true
+		}
+	}
+
+	return true
 }
 
 // GetStats 获取Chrome工具统计信息

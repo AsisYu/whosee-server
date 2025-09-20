@@ -35,4 +35,8 @@ Thumbs.db
 # Go相关
 vendor/
 *.test
-*.prof 
+*.prof
+
+# 截图相关
+static/screenshots/*
+static/itdog/* 

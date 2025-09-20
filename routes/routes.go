@@ -6,6 +6,7 @@
 package routes
 
 import (
+	"context"
 	"log"
 	"os"
 	"time"
@@ -84,7 +85,7 @@ func asyncWorkerMiddleware(workerPool *services.WorkerPool, timeout time.Duratio
 		domainStr, _ := domain.(string)
 
 		// 创建一个带超时的上下文
-		reqCtx, cancel := c.Request.Context(), func() {}
+		reqCtx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 		c.Set("requestContext", reqCtx)
 		c.Set("cancelFunc", cancel)
 
@@ -222,7 +223,7 @@ func RegisterAPIRoutes(r *gin.Engine, serviceContainer *services.ServiceContaine
 	screenshotGroup := apiv1.Group("/screenshot")
 	screenshotGroup.Use(domainValidationMiddleware())
 	screenshotGroup.Use(rateLimitMiddleware(apiLimiter))
-	screenshotGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 30*time.Second))
+	screenshotGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 120*time.Second))
 	screenshotGroup.GET("", handlers.ScreenshotHandler)
 	screenshotGroup.GET("/:domain", handlers.ScreenshotHandler)
 

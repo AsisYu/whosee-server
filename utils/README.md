@@ -6,11 +6,153 @@
 
 ## 文件列表与功能
 
+### 核心工具文件
 - `api.go` - API响应格式化工具和统一响应结构
-- `domain.go` - 域名验证和清理工具
 - `string_utils.go` - 字符串处理工具函数
+- `cache_keys.go` - 缓存键生成和管理工具
+- `health_logger.go` - 健康检查日志记录工具
+
+### 域名处理工具 
+- `domain.go` - **增强的域名验证和安全工具**
+  - 域名格式验证和清理
+  - URL安全性检查
+  - 安全文件名生成
+  - 防止路径遍历攻击
+
+### Chrome浏览器工具 
 - `chrome.go` - Chrome浏览器工具和智能实例管理（支持冷启动、热启动、智能混合模式）
 - `chrome_downloader.go` - Chrome浏览器下载器，支持智能平台检测和自动下载
+
+##  安全增强功能
+
+### 域名验证和安全工具
+
+```go
+// IsValidDomain 验证域名是否有效
+func IsValidDomain(domain string) bool {
+    if domain == "" {
+        return false
+    }
+
+    // 清理域名
+    cleaned := SanitizeDomain(domain)
+    if cleaned == "" {
+        return false
+    }
+
+    // 长度检查
+    if len(cleaned) > 253 {
+        return false
+    }
+
+    // 基本格式验证
+    domainRegex := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$`)
+    if !domainRegex.MatchString(cleaned) {
+        return false
+    }
+
+    // 检查是否包含有效的TLD
+    parts := strings.Split(cleaned, ".")
+    if len(parts) < 2 {
+        return false
+    }
+
+    return true
+}
+
+// ValidateURL 验证URL安全性
+func ValidateURL(url string) bool {
+    if url == "" {
+        return false
+    }
+
+    // 检查协议
+    if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+        return false
+    }
+
+    // 解析URL
+    parsedURL, err := urlPkg.Parse(url)
+    if err != nil {
+        return false
+    }
+
+    // 检查主机名
+    if parsedURL.Host == "" {
+        return false
+    }
+
+    // 防止内网访问
+    host := parsedURL.Hostname()
+    if isPrivateIP(host) {
+        return false
+    }
+
+    return true
+}
+
+// GenerateSecureFilename 生成安全的文件名
+func GenerateSecureFilename(input string) string {
+    if input == "" {
+        return "unknown"
+    }
+
+    // 替换危险字符
+    safe := strings.ReplaceAll(input, "..", "_")
+    safe = strings.ReplaceAll(safe, "/", "_")
+    safe = strings.ReplaceAll(safe, "\\", "_")
+    safe = strings.ReplaceAll(safe, ":", "_")
+    safe = strings.ReplaceAll(safe, "*", "_")
+    safe = strings.ReplaceAll(safe, "?", "_")
+    safe = strings.ReplaceAll(safe, "<", "_")
+    safe = strings.ReplaceAll(safe, ">", "_")
+    safe = strings.ReplaceAll(safe, "|", "_")
+
+    // 限制长度
+    if len(safe) > 100 {
+        safe = safe[:100]
+    }
+
+    // 确保不为空
+    if safe == "" {
+        return "unknown"
+    }
+
+    return safe
+}
+```
+
+### 内网IP检测
+```go
+// isPrivateIP 检查是否为内网IP
+func isPrivateIP(host string) bool {
+    ip := net.ParseIP(host)
+    if ip == nil {
+        return false
+    }
+
+    // 私有网络范围
+    privateRanges := []string{
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+    }
+
+    for _, cidr := range privateRanges {
+        _, network, _ := net.ParseCIDR(cidr)
+        if network != nil && network.Contains(ip) {
+            return true
+        }
+    }
+
+    return false
+}
+```
 
 ## 标准响应格式
 
@@ -19,96 +161,55 @@
 ```go
 // 统一响应结构
 type APIResponse struct {
-	Success bool        `json:"success"`
-	Data    interface{} `json:"data,omitempty"`
-	Error   *APIError   `json:"error,omitempty"`
-	Meta    *MetaInfo   `json:"meta,omitempty"`
+    Success bool        `json:"success"`
+    Data    interface{} `json:"data,omitempty"`
+    Error   *APIError   `json:"error,omitempty"`
+    Meta    *MetaInfo   `json:"meta,omitempty"`
 }
 
 // 错误信息结构
 type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+    Code    string `json:"code"`
+    Message string `json:"message"`
 }
 
 // 元信息结构
 type MetaInfo struct {
-	Timestamp  string `json:"timestamp"`
-	RequestID  string `json:"requestId,omitempty"`
-	Cached     bool   `json:"cached,omitempty"`
-	CachedAt   string `json:"cachedAt,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Processing int64  `json:"processingTimeMs,omitempty"`
+    Timestamp  string `json:"timestamp"`
+    RequestID  string `json:"requestId,omitempty"`
+    Cached     bool   `json:"cached,omitempty"`
+    CachedAt   string `json:"cachedAt,omitempty"`
+    Version    string `json:"version,omitempty"`
+    Processing int64  `json:"processingTimeMs,omitempty"`
 }
 
 // SuccessResponse 统一成功响应
 func SuccessResponse(c *gin.Context, data interface{}, meta *MetaInfo) {
-	if meta == nil {
-		meta = &MetaInfo{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-		}
-	}
+    if meta == nil {
+        meta = &MetaInfo{
+            Timestamp: time.Now().UTC().Format(time.RFC3339),
+        }
+    }
 
-	c.JSON(200, APIResponse{
-		Success: true,
-		Data:    data,
-		Meta:    meta,
-	})
+    c.JSON(200, APIResponse{
+        Success: true,
+        Data:    data,
+        Meta:    meta,
+    })
 }
 
 // ErrorResponse 统一错误响应
 func ErrorResponse(c *gin.Context, statusCode int, errorCode string, message string) {
-	c.JSON(statusCode, APIResponse{
-		Success: false,
-		Error: &APIError{
-			Code:    errorCode,
-			Message: message,
-		},
-		Meta: &MetaInfo{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-		},
-	})
-}
-```
-
-## 域名验证
-
-工具包提供了域名验证功能，确保输入的域名符合有效格式：
-
-```go
-// IsValidDomain 验证域名是否有效
-func IsValidDomain(domain string) bool {
-	// 忽略协议前缀
-	domain = strings.TrimPrefix(strings.TrimPrefix(domain, "http://"), "https://")
-	
-	// 移除端口和路径
-	if idx := strings.Index(domain, ":"); idx != -1 {
-		domain = domain[:idx]
-	}
-	if idx := strings.Index(domain, "/"); idx != -1 {
-		domain = domain[:idx]
-	}
-	
-	// 使用正则表达式验证域名格式
-	domainRegex := regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+ [a-zA-Z]{2,}$`)
-	return domainRegex.MatchString(domain)
-}
-
-// SanitizeDomain 清理和标准化域名
-func SanitizeDomain(domain string) string {
-	// 去除协议前缀
-	domain = strings.TrimPrefix(strings.TrimPrefix(domain, "http://"), "https://")
-	
-	// 移除端口和路径
-	if idx := strings.Index(domain, ":"); idx != -1 {
-		domain = domain[:idx]
-	}
-	if idx := strings.Index(domain, "/"); idx != -1 {
-		domain = domain[:idx]
-	}
-	
-	// 转换为小写
-	return strings.ToLower(domain)
+    c.JSON(statusCode, APIResponse{
+        Success: false,
+        Error: &APIError{
+            Code:    errorCode,
+            Message: message,
+        },
+        Meta: &MetaInfo{
+            Timestamp: time.Now().UTC().Format(time.RFC3339),
+        },
+    })
 }
 ```
 
@@ -119,18 +220,18 @@ func SanitizeDomain(domain string) string {
 ```go
 // TruncateString 截断长字符串，超过最大长度时添加省略号
 func TruncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+    if len(s) <= maxLen {
+        return s
+    }
+    return s[:maxLen] + "..."
 }
 ```
 
-## Chrome浏览器工具
+## Chrome浏览器工具 
 
 Chrome工具提供了智能的浏览器实例管理，用于截图和页面操作。采用智能混合模式，特别适合WHOIS服务（主要功能）+ 偶尔截图的使用场景。
 
-### 🎯 核心特性
+###  核心特性
 
 - **智能混合模式** - 默认采用智能混合模式，按需启动+智能复用
 - **三种运行模式** - 冷启动、热启动、智能混合，可根据使用场景选择
@@ -140,7 +241,7 @@ Chrome工具提供了智能的浏览器实例管理，用于截图和页面操�
 - **并发控制** - 限制最大并发数，避免资源耗尽
 - **错误恢复** - 自动重启异常的Chrome实例
 
-### 🔧 基本使用
+###  基本使用
 
 ```go
 // 获取全局Chrome工具实例（智能混合模式）
@@ -164,14 +265,14 @@ stats := utils.GetChromeStats()
 fmt.Printf("Chrome运行状态: %+v\n", stats)
 ```
 
-### 🎛️ 模式配置
+###  模式配置
 
 Chrome工具支持三种运行模式，可根据使用场景灵活选择：
 
 ```go
 // 方式1: 使用便捷函数设置全局模式
 utils.SetGlobalChromeMode("cold")    // 冷启动模式
-utils.SetGlobalChromeMode("warm")    // 热启动模式  
+utils.SetGlobalChromeMode("warm")    // 热启动模式
 utils.SetGlobalChromeMode("auto")    // 智能混合模式（推荐）
 
 // 方式2: 使用自定义配置
@@ -188,15 +289,15 @@ customConfig := utils.ChromeConfig{
 chromeUtil := utils.NewChromeUtilWithConfig(customConfig)
 ```
 
-### 📊 三种模式对比
+### 三种模式对比
 
 | 模式 | 启动方式 | 资源占用 | 响应速度 | 适用场景 | 空闲管理 |
 |------|----------|----------|----------|----------|----------|
 | **冷启动** | 每次重新启动 | 最低 | 慢(2-3秒) | 极少使用截图 | 用完即关 |
 | **热启动** | 预热保持运行 | 较高 | 最快(<100ms) | 频繁使用截图 | 10分钟自动关闭 |
-| **智能混合** ⭐ | 按需+智能复用 | 中等 | 适中 | **WHOIS主业务+偶尔截图** | 智能调整(1.5-6分钟) |
+| **智能混合**  | 按需+智能复用 | 中等 | 适中 | **WHOIS主业务+偶尔截图** | 智能调整(1.5-6分钟) |
 
-### 🧠 智能混合模式详解
+###  智能混合模式详解
 
 智能混合模式是为您的使用场景特别设计的：
 
@@ -223,7 +324,7 @@ chromeUtil := utils.NewChromeUtilWithConfig(customConfig)
 [CHROME-UTIL] 智能模式：复用现有实例
 ```
 
-### 📥 Chrome下载器
+###  Chrome下载器
 
 自动管理Chrome浏览器的下载和安装：
 
@@ -257,7 +358,7 @@ fmt.Printf("Chrome信息: %+v\n", info)
 - **文件完整性验证** - 下载后验证文件大小和可执行性
 - **智能路径搜索** - 支持多种Chrome归档结构
 
-### 🔧 高级功能
+###  高级功能
 
 ```go
 // 强制重置Chrome实例
@@ -281,7 +382,7 @@ chromeUtil.Stop()
 err := chromeUtil.Restart()
 ```
 
-### ⚡ 性能优化
+###  性能优化
 
 - **并发控制** - 最大3个并发Chrome操作，避免资源竞争
 - **内存优化** - 针对截图场景优化的启动参数
@@ -289,12 +390,56 @@ err := chromeUtil.Restart()
 - **资源释放** - 自动空闲超时和资源清理
 - **上下文管理** - 为每个操作提供独立的子上下文
 
-### 🛠️ 诊断和监控
+###  诊断和监控
 
 - **简化日志** - 去除定期健康检查，只在必要时输出诊断信息
 - **智能诊断** - 仅在出现问题时执行详细诊断
 - **统计信息** - 使用次数、运行时间、成功率等统计
 - **错误恢复** - 连续失败时自动执行强制重置
+
+## 缓存键管理
+
+```go
+// 缓存键生成工具
+func GenerateCacheKey(prefix string, params ...string) string {
+    key := prefix
+    for _, param := range params {
+        key += ":" + param
+    }
+    return key
+}
+
+// 通用缓存键前缀
+const (
+    CacheKeyWhois      = "whois"
+    CacheKeyDNS        = "dns"
+    CacheKeyScreenshot = "screenshot"
+    CacheKeyHealth     = "health"
+)
+```
+
+## 健康检查日志
+
+```go
+// 健康检查日志记录器
+type HealthLogger struct {
+    logger *log.Logger
+    file   *os.File
+}
+
+// 记录健康检查日志
+func (hl *HealthLogger) LogHealth(component string, status bool, details map[string]interface{}) {
+    logEntry := map[string]interface{}{
+        "timestamp": time.Now().UTC().Format(time.RFC3339),
+        "component": component,
+        "status":    status,
+        "details":   details,
+    }
+
+    jsonData, _ := json.Marshal(logEntry)
+    hl.logger.Println(string(jsonData))
+}
+```
 
 ## 设计原则
 
@@ -303,6 +448,31 @@ err := chromeUtil.Restart()
 3. **智能化** - 根据使用模式自动优化性能和资源使用
 4. **简单性** - 每个工具应该做一件事并做好
 5. **可靠性** - 具备错误恢复和自愈能力
+6. **安全性** - 所有输入都经过验证和清理 
+
+## 安全最佳实践 
+
+### 输入验证
+```go
+// 总是验证域名
+if !utils.IsValidDomain(domain) {
+    return errors.New("无效的域名格式")
+}
+
+// 验证URL安全性
+if !utils.ValidateURL(url) {
+    return errors.New("不安全的URL")
+}
+
+// 生成安全文件名
+safeFileName := utils.GenerateSecureFilename(userInput)
+```
+
+### 防护措施
+- **路径遍历防护** - 防止 `../../../etc/passwd` 等攻击
+- **内网访问防护** - 阻止访问内网IP地址
+- **文件名清理** - 移除危险字符和控制字符
+- **输入长度限制** - 防止过长输入导致的问题
 
 ## 最佳实践
 
@@ -311,3 +481,29 @@ err := chromeUtil.Restart()
 3. **资源清理** - 及时调用cancel函数释放Chrome上下文
 4. **性能监控** - 定期查看Chrome统计信息，了解使用情况
 5. **模式选择** - 根据截图使用频率选择合适的运行模式
+6. **安全验证** - 始终验证用户输入的域名和URL 
+7. **文件安全** - 使用安全文件名生成，防止路径攻击 
+
+## 工具函数索引
+
+### 域名和URL
+- `IsValidDomain(domain string) bool` - 验证域名格式
+- `SanitizeDomain(domain string) string` - 清理域名
+- `ValidateURL(url string) bool` - 验证URL安全性
+
+### 文件安全
+- `GenerateSecureFilename(input string) string` - 生成安全文件名
+
+### 字符串处理
+- `TruncateString(s string, maxLen int) string` - 截断字符串
+
+### API响应
+- `SuccessResponse(c *gin.Context, data interface{}, meta *MetaInfo)` - 成功响应
+- `ErrorResponse(c *gin.Context, statusCode int, errorCode string, message string)` - 错误响应
+
+### Chrome管理
+- `GetGlobalChromeUtil() *ChromeUtil` - 获取Chrome工具实例
+- `SetGlobalChromeMode(mode string)` - 设置Chrome模式
+
+### 缓存管理
+- `GenerateCacheKey(prefix string, params ...string) string` - 生成缓存键
