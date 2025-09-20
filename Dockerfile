@@ -55,6 +55,9 @@ COPY --from=builder /app/main /app/
 COPY --from=builder /app/static /app/static/
 COPY --from=builder /app/.env.example /app/.env
 
+# 复制Chrome运行时（如果存在）
+COPY --from=builder /app/chrome_runtime /app/chrome_runtime
+
 # 修改文件权限
 RUN chown -R appuser:appgroup /app
 

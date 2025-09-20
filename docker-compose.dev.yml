@@ -52,9 +52,16 @@ services:
       - HEALTH_CHECK_INTERVAL_DAYS=1
       - HEALTH_LOG_SEPARATE=true
       - HEALTH_LOG_SILENT=false
+    # Chrome在容器中运行需要的安全配置
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_ADMIN
+    # 需要特权模式以支持Chrome的namespace操作
+    privileged: true
     volumes:
-      # 开发时源码映射（热重载）
-      - .:/app
+      # 开发时源码映射（热重载） - 注释掉避免覆盖编译后的二进制文件
+      # - .:/app
       # 日志
       - ./logs:/app/logs
       # 静态文件
