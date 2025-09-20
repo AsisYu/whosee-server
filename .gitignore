@@ -36,7 +36,4 @@ Thumbs.db
 vendor/
 *.test
 *.prof
-
-# 截图相关
-static/screenshots/*
-static/itdog/* 
+ 
