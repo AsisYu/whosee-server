@@ -31,7 +31,7 @@ type Claims struct {
 func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 获取Authorization头
-		authHeader := c.GetHeader("Authorization")
+		authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 		if authHeader == "" {
 			log.Printf("Missing auth header from IP: %s", c.ClientIP())
 			c.AbortWithStatusJSON(401, gin.H{"error": "Missing authorization header"})
@@ -40,14 +40,14 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 
 		// 🔐 安全修复：验证Bearer前缀和长度，防止DoS攻击
 		const bearerPrefix = "Bearer "
-		if !strings.HasPrefix(authHeader, bearerPrefix) {
+		if len(authHeader) < len(bearerPrefix) || !strings.HasPrefix(authHeader, bearerPrefix) {
 			log.Printf("Invalid auth header format from IP: %s", c.ClientIP())
 			c.AbortWithStatusJSON(401, gin.H{"error": "Invalid authorization header format"})
 			return
 		}
 
 		// 安全提取token
-		tokenString := authHeader[len(bearerPrefix):]
+		tokenString := strings.TrimSpace(authHeader[len(bearerPrefix):])
 		if tokenString == "" {
 			log.Printf("Empty token from IP: %s", c.ClientIP())
 			c.AbortWithStatusJSON(401, gin.H{"error": "Empty token"})
