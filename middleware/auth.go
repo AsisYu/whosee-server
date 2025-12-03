@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -37,8 +38,23 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 			return
 		}
 
-		// 验证JWT格式
-		tokenString := authHeader[7:] // 移除"Bearer "前缀
+		// 🔐 安全修复：验证Bearer前缀和长度，防止DoS攻击
+		const bearerPrefix = "Bearer "
+		if !strings.HasPrefix(authHeader, bearerPrefix) {
+			log.Printf("Invalid auth header format from IP: %s", c.ClientIP())
+			c.AbortWithStatusJSON(401, gin.H{"error": "Invalid authorization header format"})
+			return
+		}
+
+		// 安全提取token
+		tokenString := authHeader[len(bearerPrefix):]
+		if tokenString == "" {
+			log.Printf("Empty token from IP: %s", c.ClientIP())
+			c.AbortWithStatusJSON(401, gin.H{"error": "Empty token"})
+			return
+		}
+
+		// 验证JWT
 		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method")

@@ -51,8 +51,12 @@ WORKDIR /app
 # 从builder阶段复制编译好的应用
 COPY --from=builder /app/main /app/
 
-# 复制配置文件
-COPY --from=builder /app/.env.example /app/.env
+# ⚠️ 安全提示：不要复制.env文件到镜像中！
+# 生产环境应通过以下方式注入配置：
+# 1. Docker环境变量: docker run -e JWT_SECRET=xxx -e API_KEY=xxx
+# 2. docker-compose.yml的environment或env_file
+# 3. Kubernetes Secrets/ConfigMaps
+# 4. 云平台的secrets管理服务
 
 # 修改文件权限
 RUN chown -R appuser:appgroup /app

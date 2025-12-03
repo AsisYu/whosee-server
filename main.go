@@ -187,9 +187,9 @@ func getCorsConfig() cors.Config {
 }
 
 func main() {
-	// 加载环境变量
+	// 加载环境变量（.env文件可选，支持纯环境变量部署）
 	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
+		log.Println("未找到.env文件，将使用系统环境变量")
 	}
 
 	// 初始化日志系统

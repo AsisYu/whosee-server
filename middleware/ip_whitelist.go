@@ -118,61 +118,48 @@ func IPWhitelistMiddleware() gin.HandlerFunc {
 func IPWhitelistWithConfig(config IPWhitelistConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
-		
-		// 如果有Redis客户端，尝试从缓存中获取结果
+
+		// 🔐 安全修复：分离IP白名单检查和API Key验证
+		// 只缓存IP白名单的判定结果，API Key每次都验证
+		var ipAllowed bool
+
+		// 尝试从缓存获取IP白名单检查结果
 		if config.RedisClient != nil {
-			cacheKey := "ip:whitelist:" + ip
+			cacheKey := "ip:check:" + ip  // 修改缓存键，明确这是IP检查结果
 			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 			defer cancel()
-			
-			// 尝试从缓存获取结果
-			cachedResult, err := config.RedisClient.Get(ctx, cacheKey).Result()
+
+			cachedIP, err := config.RedisClient.Get(ctx, cacheKey).Result()
 			if err == nil {
-				// 缓存命中，直接使用缓存结果
-				if cachedResult == "allowed" {
-					c.Next()
-					return
-				} else if cachedResult == "denied" {
-					if HasValidKey(c, config.APIKey) {
-						if !config.StrictMode {
-							c.Next()
-							return
-						}
-					}
-					c.JSON(403, gin.H{
-						"error":   "ACCESS_DENIED",
-						"message": "您没有访问此API的权限",
-					})
-					c.Abort()
-					return
+				// 缓存命中
+				ipAllowed = (cachedIP == "true")
+			} else {
+				// 缓存未命中，执行检查并缓存
+				ipAllowed = IsWhitelistedIP(ip, config)
+				cacheValue := "false"
+				if ipAllowed {
+					cacheValue = "true"
 				}
+				config.RedisClient.Set(ctx, cacheKey, cacheValue, config.CacheExpiration)
 			}
+		} else {
+			// 没有Redis，直接检查
+			ipAllowed = IsWhitelistedIP(ip, config)
 		}
-		
-		// 检查IP白名单
-		ipAllowed := IsWhitelistedIP(ip, config)
-		
-		// 检查API密钥
+
+		// 🔐 API Key每次都验证（不缓存）
 		keyValid := HasValidKey(c, config.APIKey)
-		
+
 		// 根据严格模式决定是否允许访问
 		if config.StrictMode {
 			// 严格模式：必须同时通过IP和API密钥验证
-			allowed := ipAllowed && keyValid
-			if !allowed {
+			if !(ipAllowed && keyValid) {
 				log.Printf("[安全] 访问被拒绝，IP: %s，严格模式下IP白名单和API密钥验证失败", ip)
 				c.JSON(403, gin.H{
 					"error":   "ACCESS_DENIED",
 					"message": "您没有访问此API的权限",
 				})
 				c.Abort()
-				
-				// 缓存结果
-				if config.RedisClient != nil {
-					ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-					defer cancel()
-					config.RedisClient.Set(ctx, "ip:whitelist:"+ip, "denied", config.CacheExpiration)
-				}
 				return
 			}
 		} else {
@@ -184,24 +171,11 @@ func IPWhitelistWithConfig(config IPWhitelistConfig) gin.HandlerFunc {
 					"message": "您没有访问此API的权限",
 				})
 				c.Abort()
-				
-				// 缓存结果
-				if config.RedisClient != nil {
-					ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-					defer cancel()
-					config.RedisClient.Set(ctx, "ip:whitelist:"+ip, "denied", config.CacheExpiration)
-				}
 				return
 			}
 		}
-		
-		// 请求被允许
-		if config.RedisClient != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-			defer cancel()
-			config.RedisClient.Set(ctx, "ip:whitelist:"+ip, "allowed", config.CacheExpiration)
-		}
-		
+
+		// 验证通过
 		c.Next()
 	}
 }
