@@ -2,7 +2,7 @@ module whosee
 
 go 1.24
 
-toolchain go1.24.1
+toolchain go1.24.11
 
 require (
 	github.com/chromedp/chromedp v0.13.3
