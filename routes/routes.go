@@ -6,9 +6,14 @@
 package routes
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"log"
+	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"whosee/handlers"
@@ -31,6 +36,15 @@ func domainValidationMiddleware() gin.HandlerFunc {
 			domain = c.Query("domain")
 		}
 
+		// 统一接口允许在JSON体内传递domain
+		if domain == "" {
+			if bodyDomain, err := extractDomainFromBody(c); err == nil && bodyDomain != "" {
+				domain = bodyDomain
+			} else if err != nil {
+				log.Printf("[Domain Validation] 读取请求体失败: %v", err)
+			}
+		}
+
 		if domain == "" {
 			utils.ErrorResponse(c, 400, "MISSING_PARAMETER", "Domain parameter is required")
 			c.Abort()
@@ -49,6 +63,45 @@ func domainValidationMiddleware() gin.HandlerFunc {
 		c.Set("domain", domain)
 		c.Next()
 	}
+}
+
+// extractDomainFromBody 从JSON请求体中提取domain参数
+func extractDomainFromBody(c *gin.Context) (string, error) {
+	if c.Request == nil {
+		return "", nil
+	}
+
+	// 只处理POST/PUT/PATCH请求
+	method := c.Request.Method
+	if method != http.MethodPost && method != http.MethodPut && method != http.MethodPatch {
+		return "", nil
+	}
+
+	// 只处理JSON请求
+	contentType := c.GetHeader("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		return "", nil
+	}
+
+	// 读取body
+	bodyBytes, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return "", err
+	}
+	// 重置body供后续handler使用
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	if len(bodyBytes) == 0 {
+		return "", nil
+	}
+
+	// 解析JSON提取domain字段
+	var payload struct {
+		Domain string `json:"domain"`
+	}
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		return "", nil // JSON解析失败不报错，可能是其他格式
+	}
+	return payload.Domain, nil
 }
 
 // 限流中间件
