@@ -18,7 +18,7 @@
 - `whois_comparison.go` - WHOIS提供商比较功能，支持多个提供商同时查询对比
 - `whoisxml.go` - 与外部WhoisXML API交互的处理程序
 
-### 截图服务处理器 🆕
+### 截图服务处理器
 - `screenshot_new.go` - **重构后的统一截图处理器** (推荐使用)
   - 统一的截图服务接口，支持所有截图类型
   - 新的Chrome管理API (状态检查、重启等)
@@ -39,7 +39,7 @@
 - `GET /api/v1/whois/compare/:domain` - 多提供商WHOIS对比查询
 - `GET /api/v1/whois/providers` - 获取可用WHOIS提供商信息
 
-### RDAP查询端点 🆕
+### RDAP查询端点
 - `GET /api/v1/rdap?domain=example.com` - RDAP协议查询（专用IANA-RDAP提供商）
 - `GET /api/v1/rdap/:domain` - RDAP协议查询（路径参数）
 
@@ -71,7 +71,7 @@ RDAP (Registration Data Access Protocol) 是WHOIS的现代化替代协议，提�
 }
 ```
 
-#### Chrome管理接口 🆕
+#### Chrome管理接口
 - `GET /api/v1/screenshot/chrome/status` - Chrome状态检查
 - `POST /api/v1/screenshot/chrome/restart` - Chrome重启
 

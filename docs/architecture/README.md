@@ -2,7 +2,7 @@
 
 本目录包含项目架构设计文档和技术决策记录。
 
-## 📁 目录结构
+## 目录结构
 
 ```
 docs/architecture/
@@ -10,7 +10,7 @@ docs/architecture/
 └── (待添加架构文档)
 ```
 
-## 📐 架构概览
+## 架构概览
 
 Whosee.me是一个高性能域名信息查询和分析服务，采用Go 1.24+和Gin框架构建。
 
@@ -52,7 +52,7 @@ Whosee.me是一个高性能域名信息查询和分析服务，采用Go 1.24+和
 - **浏览器**: Chrome/Chromium (via chromedp)
 - **部署**: Docker, Kubernetes
 
-## 📚 待添加文档
+## 待添加文档
 
 本目录计划添加以下架构文档：
 
@@ -111,7 +111,7 @@ Whosee.me是一个高性能域名信息查询和分析服务，采用Go 1.24+和
 - **格式**: ADR-001-title.md, ADR-002-title.md, ...
 - **内容**: 重大技术决策、背景、权衡、结果
 
-## 🔗 相关文档
+## 相关文档
 
 ### 已有文档
 - [CLAUDE.md](../../CLAUDE.md) - 项目级开发指南（Claude Code使用）
@@ -123,7 +123,7 @@ Whosee.me是一个高性能域名信息查询和分析服务，采用Go 1.24+和
 - [Gin框架文档](https://gin-gonic.com/docs/)
 - [Redis文档](https://redis.io/documentation)
 
-## 📝 文档规范
+## 文档规范
 
 ### 创建新架构文档时
 
@@ -184,7 +184,7 @@ Whosee.me是一个高性能域名信息查询和分析服务，采用Go 1.24+和
 - [Draw.io](https://app.diagrams.net/) - 在线流程图工具
 - [PlantUML](https://plantuml.com/) - 代码生成UML图
 
-## 🎯 优先级
+## 优先级
 
 按优先级添加架构文档：
 
@@ -197,12 +197,3 @@ Whosee.me是一个高性能域名信息查询和分析服务，采用Go 1.24+和
 | 🟢 低 | service-interactions.md | 代码已较清晰 |
 | 🟢 低 | performance-optimization.md | 性能已可接受 |
 
-## 📖 贡献指南
-
-添加架构文档时：
-1. 遵循文档模板结构
-2. 包含清晰的图表（文字描述 + 可视化）
-3. 说明"为什么"而非仅"是什么"
-4. 记录设计权衡和未选择的方案
-5. 更新本README的"目录结构"和索引
-6. Git commit引用架构文档路径

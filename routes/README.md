@@ -10,7 +10,7 @@
 - `routes.go` - 主路由配置和注册
 - `api.go` - API特定路由配置
 
-### 专门化路由文件 🆕
+### 专门化路由文件
 - `screenshot_routes.go` - **重构后的截图服务路由**
   - 新版统一截图API路由配置
   - Chrome管理API路由
@@ -77,7 +77,7 @@ func RegisterRoutes(r *gin.Engine, serviceContainer *services.ServiceContainer) 
     // 注册API路由
     RegisterAPIRoutes(r, serviceContainer)
 
-    // 注册截图服务路由 🆕
+    // 注册截图服务路由
     RegisterScreenshotRoutes(r, serviceContainer)
 
     // 注册健康检查路由
@@ -101,7 +101,7 @@ api.GET("/dns/:domain", handlers.DNSQuery)
 api.GET("/health", handlers.HealthCheck)
 ```
 
-### 截图服务组 (`/api/v1/screenshot/`) 🆕
+### 截图服务组 (`/api/v1/screenshot/`)
 ```go
 // 新版统一接口
 screenshotGroup.POST("/", screenshotHandler.TakeScreenshot)
@@ -140,7 +140,7 @@ compatGroup.GET("itdog/resolve/:domain", handlers.NewITDogResolveHandler)
 3. **限流** - 基于IP和/或域名限制请求速率
 4. **CORS配置** - 处理跨源资源共享
 
-### 截图服务专用中间件 🆕
+### 截图服务专用中间件
 ```go
 // 截图服务中间件栈
 screenshotGroup.Use(domainValidationMiddleware())
@@ -161,7 +161,7 @@ func addRedisMiddleware(serviceContainer *services.ServiceContainer) gin.Handler
 路由包通过URL路径前缀实现API版本化：
 
 - **版本1 API**: `/api/v1/...` (当前主版本)
-- **新版截图API**: `/api/v1/screenshot/...` 🆕
+- **新版截图API**: `/api/v1/screenshot/...`
 - **兼容API**: `/api/v1/screenshot/:domain`, `/api/v1/itdog/:domain` 等
 
 这允许在引入新的端点版本的同时保持向后兼容性。
@@ -256,8 +256,8 @@ api.GET("/screenshot", handlers.NewScreenshotRouteHandler) // ?domain=example.co
 2. **逻辑分组** - 路由按功能模块分组组织
 3. **一致命名** - 路由命名遵循RESTful模式
 4. **最小重复** - 在组级别应用通用中间件
-5. **向后兼容** - 新版本不破坏现有API 🆕
-6. **性能优化** - 路由级别的性能优化 🆕
+5. **向后兼容** - 新版本不破坏现有API
+6. **性能优化** - 路由级别的性能优化
 
 ## 高并发支持
 
@@ -267,11 +267,11 @@ api.GET("/screenshot", handlers.NewScreenshotRouteHandler) // ?domain=example.co
 2. **请求过滤** - 在无效请求消耗资源前提前拒绝
 3. **异步处理** - 非阻塞API处理模式
 4. **增强型健康检查** - 所有服务的统一健康检查端点
-5. **Chrome资源池** - 统一Chrome实例管理，防止资源过载 🆕
+5. **Chrome资源池** - 统一Chrome实例管理，防止资源过载
 
 ## 监控和调试
 
-### Chrome管理API 🆕
+### Chrome管理API
 ```bash
 # 检查Chrome状态
 GET /api/v1/screenshot/chrome/status

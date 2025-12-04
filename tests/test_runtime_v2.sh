@@ -33,7 +33,7 @@ log_test() {
 
 log_pass() {
     echo -e "${GREEN}[通过] $1${NC}"
-    TEST_RESULTS+=("✅ $1")
+    TEST_RESULTS+=("$1")
 }
 
 log_fail() {

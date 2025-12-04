@@ -7,7 +7,7 @@
 ## 文件列表与功能
 
 ### 核心业务服务
-- `screenshot_service.go` - **重构后的统一截图服务** 🆕
+- `screenshot_service.go` - **重构后的统一截图服务**
   - 统一的截图业务逻辑实现
   - 支持所有截图类型：基础、元素、ITDog系列
   - 智能缓存和错误处理机制
@@ -99,9 +99,9 @@ type ServiceContainer struct {
 2. **分布式限流器** - 使用Redis实现的限流机制
 3. **熔断器模式** - 防止系统在故障条件下过载
 4. **服务级缓存** - 降低外部服务调用频率
-5. **Chrome实例池** - 统一Chrome资源管理 🆕
+5. **Chrome实例池** - 统一Chrome资源管理
 
-## Chrome管理器特性 🆕
+## Chrome管理器特性
 
 ```go
 // 获取Chrome上下文
@@ -153,9 +153,9 @@ func (cm *ChromeManager) GetStats() map[string]interface{} {
 健康检查服务提供系统各组件的健康状态：
 
 1. **DNS服务健康检查** - 检查多个DNS服务器的可用性
-2. **截图服务健康检查** - 检查Chrome实例和截图服务状态 🆕
+2. **截图服务健康检查** - 检查Chrome实例和截图服务状态
 3. **ITDog服务健康检查** - 检查ITDog API的可用性
-4. **Chrome管理器健康检查** - 实时Chrome状态监控 🆕
+4. **Chrome管理器健康检查** - 实时Chrome状态监控
 
 ```go
 func (h *HealthChecker) DetailedHealth() map[string]interface{} {
@@ -265,7 +265,7 @@ func (cb *CircuitBreaker) Execute(request func() (interface{}, error)) (interfac
 2. **依赖注入** - 通过构造函数注入依赖项
 3. **错误处理** - 统一的错误处理和用户友好消息
 4. **服务边界** - 保持清晰的服务边界定义
-5. **资源管理** - 统一的资源生命周期管理 🆕
+5. **资源管理** - 统一的资源生命周期管理
 
 ## 服务优化
 
@@ -273,7 +273,7 @@ func (cb *CircuitBreaker) Execute(request func() (interface{}, error)) (interfac
 2. **性能监控** - 详细的性能统计和指标
 3. **日志记录** - 结构化日志和操作追踪
 4. **服务降级** - 熔断器实现自动服务降级
-5. **资源复用** - Chrome实例复用提升性能 🆕
+5. **资源复用** - Chrome实例复用提升性能
 
 ## 迁移指南
 

@@ -104,7 +104,7 @@ graph TD
 风险: 全球用户无法访问
 ```
 
-**非严格模式 (StrictMode=false)** ✅ 推荐
+**非严格模式 (StrictMode=false)** 推荐
 ```
 条件: IP白名单验证 OR API密钥验证
 适用: 生产环境

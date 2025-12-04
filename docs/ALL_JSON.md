@@ -16,7 +16,7 @@
 - [认证相关 API](#认证相关-api)
   - [获取JWT令牌](#获取jwt令牌)
 - [WHOIS查询 API](#whois查询-api)
-- [RDAP查询 API](#rdap查询-api) 🆕
+- [RDAP查询 API](#rdap查询-api)
 - [DNS查询 API](#dns查询-api)
 - [网站截图 API](#网站截图-api)
   - [普通截图](#普通截图)

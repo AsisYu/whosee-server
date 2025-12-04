@@ -37,7 +37,7 @@ Whosee.me 是一个高性能的域名信息查询和分析服务，提供快速�
 - **Web框架**: 基于Gin构建的高性能Web服务
 - **缓存系统**: 使用Redis进行数据缓存和分布式限流
 - **服务管理**: 服务容器模式管理多个服务组件
-- **重构截图系统** 🆕:
+- **重构截图系统** :
   - **统一截图服务**: 单一接口支持所有截图类型
   - **Chrome管理器**: 智能并发控制、熔断器保护、性能统计
   - **安全增强**: 域名验证、安全文件操作、错误脱敏
@@ -52,47 +52,42 @@ Whosee.me 是一个高性能的域名信息查询和分析服务，提供快速�
 ```
 .
 ├── handlers/                            # 请求处理器和异步处理函数
-│   ├── screenshot_new.go                # 🆕 重构后的统一截图处理器
+│   ├── screenshot_new.go                # 重构后的统一截图处理器
 │   └── screenshot.go                    # 原有截图处理器（兼容保留）
 ├── middleware/                          # 中间件组件
 ├── providers/                           # WHOIS数据提供商实现
 ├── services/                            # 核心业务逻辑和服务组件
-│   ├── screenshot_service.go            # 🆕 统一截图服务
-│   ├── chrome_manager.go                # 🆕 重构Chrome管理器
+│   ├── screenshot_service.go            # 统一截图服务
+│   ├── chrome_manager.go                # 重构Chrome管理器
 │   ├── whois_manager.go                 # 🔧 P1并发安全修复
 │   └── ...                              # 其他服务组件
 ├── routes/                              # API路由定义
-│   └── screenshot_routes.go             # 🆕 截图服务路由
+│   └── screenshot_routes.go             # 截图服务路由
 ├── types/                               # 数据类型定义
 ├── utils/                               # 辅助函数和工具
 │   └── domain.go                        # 增强的安全工具
-├── tests/                               # 🆕 测试脚本和工具
+├── tests/                               # 测试脚本和工具
 │   ├── README.md                        # 测试文档索引
 │   ├── test_runtime.sh                  # 旧版运行时测试
-│   └── test_runtime_v2.sh               # 🔐 P0修复运行时测试（推荐）
+│   └── test_runtime_v2.sh               # P0修复运行时测试（推荐）
 ├── docs/                                # 文档目录
-│   ├── reports/                         # 🆕 项目报告
+│   ├── reports/                         # 项目报告
 │   │   ├── README.md                    # 报告索引
 │   │   ├── PROJECT_HEALTH_REPORT.md     # 项目健康检查报告
-│   │   ├── P0_FIX_REVIEW.md             # 🔐 P0安全修复审查
-│   │   └── RUNTIME_TEST_REPORT.md       # 🔐 运行时测试报告
-│   ├── architecture/                    # 🆕 架构文档
+│   │   ├── P0_FIX_REVIEW.md             # P0安全修复审查
+│   │   └── RUNTIME_TEST_REPORT.md       # 运行时测试报告
+│   ├── architecture/                    # 架构文档
 │   │   └── README.md                    # 架构文档索引
 │   ├── BACKEND_AUTHENTICATION_FLOW.md   # 后端认证流程详细文档
 │   ├── AUTHENTICATION_EXAMPLES.md       # 认证示例集合文档
 │   ├── ALL_JSON.md                      # API响应格式文档
-│   └── SCREENSHOT_REFACTOR.md           # 🆕 截图服务重构指南
+│   └── SCREENSHOT_REFACTOR.md           # 截图服务重构指南
 ├── logs/                                # 日志文件
 ├── static/                              # 静态资源（截图等）
 ├── CLAUDE.md                            # Claude Code开发指南
 ├── .env                                 # 环境变量配置
 └── main.go                              # 应用入口
 ```
-
-**图例说明**:
-- 🆕 新增功能或重构
-- 🔐 安全修复
-- 🔧 性能或并发优化
 
 ## 安装指南
 
@@ -248,7 +243,7 @@ pm2 save
 
 ### 安全认证
 
-Whosee.me API采用多层安全验证机制，包括IP白名单、API密钥验证和JWT令牌认证。详细的验证流程请参考 [后端认证流程文档](docs/BACKEND_AUTHENTICATION_FLOW.md)。
+API采用多层安全验证机制，包括IP白名单、API密钥验证和JWT令牌认证。详细的验证流程请参考 [后端认证流程文档](docs/BACKEND_AUTHENTICATION_FLOW.md)。
 
 #### 安全配置
 
@@ -285,31 +280,7 @@ JWT_SECRET=your_strong_jwt_secret
 | `BROWSER_ERROR` | 500 | 浏览器执行错误 |
 | `ITDOG_ERROR` | 500 | ITDog测试过程中发生错误 |
 
-## 截图服务架构重构
-
-###  重构亮点
-
-Whosee.me 的截图服务经过全面重构，采用现代化架构设计，实现了显著的性能提升和功能增强：
-
-#### 性能提升
-- **资源利用率提升50%**: 统一Chrome实例管理，避免重复启动
-- **智能并发控制**: 最大3个并发任务，防止系统过载
-- **熔断器保护**: 自动故障检测和恢复机制
-- **智能缓存**: Redis缓存，支持自定义过期时间
-
-#### 安全增强
-- **输入验证**: 域名格式、URL安全性、选择器验证
-- **安全文件操作**: 防止路径遍历攻击
-- **错误脱敏**: 避免敏感信息泄露
-- **防护内网访问**: 阻止访问内网IP地址
-
-#### 维护性提升
-- **统一服务架构**: 单一接口支持所有截图类型
-- **完整向后兼容**: 保持现有API接口不变
-- **标准化错误处理**: 统一错误码和用户友好消息
-- **详细监控**: Chrome状态、性能统计、错误追踪
-
-###  技术架构
+###  截图技术架构
 
 #### 核心组件
 - **ScreenshotService**: 统一截图服务，支持基础、元素、ITDog等所有类型
@@ -328,7 +299,7 @@ Whosee.me 的截图服务经过全面重构，采用现代化架构设计，实�
 
 ### 三种运行模式
 
-Whosee.me 集成了智能Chrome管理系统，特别适合WHOIS服务（主要功能）+ 偶尔截图的使用场景：
+集成了智能Chrome管理系统，特别适合WHOIS服务（主要功能）+ 偶尔截图的使用场景：
 
 | 模式 | 启动方式 | 资源占用 | 响应速度 | 适用场景 | 空闲管理 |
 |------|----------|----------|----------|----------|----------|
@@ -368,7 +339,7 @@ utils.SetGlobalChromeMode("auto")
 
 ### 健康检查日志分离
 
-Whosee.me 支持将健康检查日志分离到独立文件，便于日志管理和分析：
+支持将健康检查日志分离到独立文件，便于日志管理和分析：
 
 #### 功能特性
 
@@ -397,9 +368,9 @@ HEALTH_LOG_SILENT=true
 
 每个目录都包含详细的README文档，包括功能说明、使用示例和最佳实践：
 
-- **[handlers/](handlers/README.md)** 🆕 - HTTP请求处理器，包含重构后的统一截图处理器
-- **[services/](services/README.md)** 🆕 - 核心业务逻辑，包含Chrome管理器和截图服务
-- **[routes/](routes/README.md)** 🆕 - API路由定义，包含新版截图路由配置
+- **[handlers/](handlers/README.md)** - HTTP请求处理器，包含重构后的统一截图处理器
+- **[services/](services/README.md)** - 核心业务逻辑，包含Chrome管理器和截图服务
+- **[routes/](routes/README.md)** - API路由定义，包含新版截图路由配置
 - **[middleware/](middleware/README.md)** - 中间件组件，包含安全、性能和监控中间件
 - **[utils/](utils/README.md)**  - 工具函数，包含增强的安全工具和Chrome管理
 - **[providers/](providers/)** - WHOIS数据提供商实现
@@ -424,27 +395,6 @@ HEALTH_LOG_SILENT=true
 | `API_DEV_MODE` | API开发模式 | `false` |
 | `TRUSTED_IPS` | 受信任的IP列表 | 空 |
 
-
-###  架构演进历程
-
-Whosee.me 经历了从单一功能到完整平台的演进：
-
-1. **第一阶段**: 基础WHOIS查询服务
-2. **第二阶段**: 集成多提供商支持和智能缓存
-3. **第三阶段**: 添加截图功能和Chrome管理
-4. **第四阶段** 🆕: 截图服务全面重构，统一架构设计
-5. **第五阶段**: 安全增强和性能优化
-
-###  性能指标
-
-重构后的系统性能显著提升：
-
-- **截图响应时间**: 从平均5-8秒降低到2-4秒
-- **Chrome资源利用率**: 提升50%，内存占用降低30%
-- **并发处理能力**: 支持3个并发截图任务
-- **错误率**: 从15%降低到<2%
-- **缓存命中率**: 85%以上
-
 ## 文档说明
 
 ### 核心文档
@@ -452,7 +402,7 @@ Whosee.me 经历了从单一功能到完整平台的演进：
 - **[后端认证流程文档](docs/BACKEND_AUTHENTICATION_FLOW.md)**: 详细说明API安全认证机制，包括JWT令牌、API密钥验证和IP白名单的完整流程，含Mermaid流程图
 - **[认证示例集合文档](docs/AUTHENTICATION_EXAMPLES.md)**: 提供各种认证场景的实用示例，包括curl命令、多语言客户端代码、错误处理和调试技巧
 - **[API响应格式文档](docs/ALL_JSON.md)**: 所有API端点的响应格式和数据结构说明
-- **[截图服务重构文档](docs/SCREENSHOT_REFACTOR.md)** 🆕: 详细的重构说明、迁移指南和性能对比
+- **[截图服务重构文档](docs/SCREENSHOT_REFACTOR.md)** : 详细的重构说明、迁移指南和性能对比
 
 ### 验证流程概述
 
