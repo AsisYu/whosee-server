@@ -95,26 +95,45 @@ func (m *WhoisManager) AddProvider(provider WhoisProvider) {
 }
 
 func (m *WhoisManager) selectProvider() WhoisProvider {
+	// 🔧 并发安全修复(P1-1): 两阶段provider选择
+	// 阶段1: 读锁下复制快照，避免在持有读锁时写共享状态
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	providersSnapshot := make([]WhoisProvider, len(m.providers))
+	copy(providersSnapshot, m.providers)
 
+	statusSnapshot := make(map[string]providerStatus, len(m.status))
+	for name, status := range m.status {
+		statusSnapshot[name] = *status // 值拷贝，非指针拷贝
+	}
+	m.mu.RUnlock()
+
+	// 阶段2: 无锁计算最优provider（使用快照数据）
 	var selected WhoisProvider
 	var minScore float64 = -1
+	pendingReEnable := make([]string, 0) // 收集需要重新启用的provider
 
 	now := time.Now().UTC() // 使用UTC时间确保时区一致性
 	log.Printf("开始选择WHOIS提供商. 当前可用提供商状态:")
 
-	for _, p := range m.providers {
-		status := m.status[p.Name()]
+	for _, p := range providersSnapshot {
+		status, ok := statusSnapshot[p.Name()]
+		if !ok {
+			log.Printf("  警告: 提供商 %s 没有状态信息，跳过", p.Name())
+			continue
+		}
+
 		log.Printf("  提供商: %s, 可用: %v, 使用次数: %d, 错误次数: %d, 上次使用: %v (距今%v)",
 			p.Name(), status.isAvailable, status.count, status.errorCount,
 			status.lastUsed.Format("2006-01-02 15:04:05"),
 			now.Sub(status.lastUsed).Round(time.Second))
 
+		// 检查是否需要重新启用（冷却期结束）
 		if !status.isAvailable {
 			if now.Sub(status.lastUsed) > 5*time.Minute {
 				status.isAvailable = true
 				status.errorCount = 0
+				statusSnapshot[p.Name()] = status // 更新快照
+				pendingReEnable = append(pendingReEnable, p.Name())
 				log.Printf("  重新启用提供商: %s", p.Name())
 			} else {
 				log.Printf("  跳过不可用提供商: %s", p.Name())
@@ -122,6 +141,7 @@ func (m *WhoisManager) selectProvider() WhoisProvider {
 			}
 		}
 
+		// 计算provider得分（基于使用次数、错误次数、距离上次使用时间）
 		usageWeight := float64(status.count) * 10.0
 		errorWeight := float64(status.errorCount) * 20.0
 		lastUsedMinutes := now.Sub(status.lastUsed).Minutes()
@@ -144,6 +164,30 @@ func (m *WhoisManager) selectProvider() WhoisProvider {
 		log.Printf("最终选择提供商: %s, 得分: %v", selected.Name(), minScore)
 	} else {
 		log.Printf("无可用提供商")
+	}
+
+	// 阶段3: 短暂写锁回写状态变更（重新启用的provider + 选中provider的统计）
+	writeBackTime := time.Now()
+	if len(pendingReEnable) > 0 || selected != nil {
+		m.mu.Lock()
+
+		// 回写重新启用的provider状态
+		for _, name := range pendingReEnable {
+			if status, ok := m.status[name]; ok {
+				status.isAvailable = true
+				status.errorCount = 0
+			}
+		}
+
+		// 更新选中provider的使用统计
+		if selected != nil {
+			if status, ok := m.status[selected.Name()]; ok {
+				status.count++
+				status.lastUsed = writeBackTime
+			}
+		}
+
+		m.mu.Unlock()
 	}
 
 	return selected
@@ -479,9 +523,19 @@ func (m *WhoisManager) queryWithTimeout(provider WhoisProvider, domain string, t
 }
 
 func (m *WhoisManager) TestProvidersHealth() map[string]interface{} {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// 🔧 并发安全修复(P1-2): 两阶段健康检查
+	// 阶段1: 读锁下复制快照，避免长时间持有写锁阻塞查询
+	m.mu.RLock()
+	providersSnapshot := make([]WhoisProvider, len(m.providers))
+	copy(providersSnapshot, m.providers)
 
+	statusSnapshot := make(map[string]providerStatus, len(m.status))
+	for name, status := range m.status {
+		statusSnapshot[name] = *status // 值拷贝
+	}
+	m.mu.RUnlock()
+
+	// 阶段2: 无锁执行远程API调用和测试逻辑
 	results := make(map[string]interface{})
 	testDomains := []string{"google.com", "microsoft.com", "github.com"} // 使用测试域名
 
@@ -489,9 +543,13 @@ func (m *WhoisManager) TestProvidersHealth() map[string]interface{} {
 
 	const queryTimeout = 10 * time.Second
 
-	for _, provider := range m.providers {
+	for _, provider := range providersSnapshot {
 		providerName := provider.Name()
-		status := m.status[providerName]
+		status, ok := statusSnapshot[providerName]
+		if !ok {
+			log.Printf("警告: 提供商 %s 没有状态信息，跳过测试", providerName)
+			continue
+		}
 
 		providerResult := map[string]interface{}{
 			"available":      status.isAvailable,
@@ -519,12 +577,14 @@ func (m *WhoisManager) TestProvidersHealth() map[string]interface{} {
 			"statusCode":   StatusServerError,
 		}
 
+		// 执行远程查询（耗时操作，无锁）
 		queryResp, queryErr, _ := m.queryWithTimeout(provider, testDomain, queryTimeout)
 
 		responseTime := time.Since(startTime)
 		testResult["responseTime"] = responseTime.Milliseconds()
 		providerResult["responseTime"] = responseTime.Milliseconds()
 
+		// 根据测试结果更新快照中的状态
 		if queryErr != nil {
 			testResult["message"] = queryErr.Error()
 			testResult["statusCode"] = StatusServerError
@@ -570,13 +630,24 @@ func (m *WhoisManager) TestProvidersHealth() map[string]interface{} {
 		providerTestResults = append(providerTestResults, testResult)
 		providerResult["testResults"] = providerTestResults
 
+		// 更新统计信息
 		status.lastUsed = time.Now()
 		status.count++
 
 		results[providerName] = providerResult
 
+		// 阶段3: 每个测试结束后，短暂写锁同步状态到真实结构
+		m.mu.Lock()
+		if realStatus, ok := m.status[providerName]; ok {
+			realStatus.isAvailable = status.isAvailable
+			realStatus.errorCount = status.errorCount
+			realStatus.lastUsed = status.lastUsed
+			realStatus.count = status.count
+		}
+		m.mu.Unlock()
+
 		log.Printf("提供商 %s 测试结果: 响应时间 %v 毫秒，测试 %v，状态码 %v",
-			providerName, responseTime, testResult["success"], testResult["statusCode"])
+			providerName, responseTime.Milliseconds(), testResult["success"], testResult["statusCode"])
 	}
 
 	return results
