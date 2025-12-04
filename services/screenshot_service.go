@@ -43,6 +43,10 @@ const (
 	FormatBase64 OutputFormat = "base64" // Base64输出
 )
 
+// MaxUserCacheExpireHours 用户可设置的最大缓存TTL（防止DoS攻击）
+// 限制用户通过cache_expire参数造成Redis内存耗尽
+const MaxUserCacheExpireHours = 72 // 最多3天
+
 // ScreenshotRequest 统一截图请求结构
 type ScreenshotRequest struct {
 	Type        ScreenshotType `json:"type"`                  // 截图类型
@@ -570,9 +574,31 @@ func (s *ScreenshotService) cacheResult(key string, response *ScreenshotResponse
 		return
 	}
 
+	// 🔐 P2-2修复：防止用户设置过大的缓存TTL导致Redis内存耗尽
+	// 默认使用配置的过期时间
 	expiration := s.config.CacheExpiration
+	if expiration <= 0 {
+		// 如果配置值无效，使用默认值24小时
+		expiration = 24 * time.Hour
+	}
+
+	// 如果用户指定了缓存时间
 	if expireHours > 0 {
-		expiration = time.Duration(expireHours) * time.Hour
+		// 强制上限：最多72小时（3天）
+		if expireHours > MaxUserCacheExpireHours {
+			log.Printf("[Security] User requested cache TTL %dh exceeds max %dh, clamping to max",
+				expireHours, MaxUserCacheExpireHours)
+			expireHours = MaxUserCacheExpireHours
+		}
+
+		// 强制下限：至少1分钟，防止过于频繁的缓存失效
+		userExpiration := time.Duration(expireHours) * time.Hour
+		if userExpiration < time.Minute {
+			log.Printf("[Security] User requested cache TTL %v is too small, setting to 1 minute", userExpiration)
+			userExpiration = time.Minute
+		}
+
+		expiration = userExpiration
 	}
 
 	data, err := json.Marshal(response)

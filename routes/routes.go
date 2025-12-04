@@ -219,63 +219,8 @@ func RegisterAPIRoutes(r *gin.Engine, serviceContainer *services.ServiceContaine
 	dnsGroup.GET("", handlers.DNSHandler)
 	dnsGroup.GET("/:domain", handlers.DNSHandler)
 
-	// 截图路由
-	screenshotGroup := apiv1.Group("/screenshot")
-	screenshotGroup.Use(domainValidationMiddleware())
-	screenshotGroup.Use(rateLimitMiddleware(apiLimiter))
-	screenshotGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 120*time.Second))
-	screenshotGroup.GET("", handlers.ScreenshotHandler)
-	screenshotGroup.GET("/:domain", handlers.ScreenshotHandler)
-
-	// Base64截图路由
-	screenshotBase64Group := apiv1.Group("/screenshot/base64")
-	screenshotBase64Group.Use(domainValidationMiddleware())
-	screenshotBase64Group.Use(rateLimitMiddleware(apiLimiter))
-	screenshotBase64Group.GET("/:domain", handlers.ScreenshotBase64Handler)
-
-	// ITDog截图路由
-	itdogGroup := apiv1.Group("/itdog")
-	itdogGroup.Use(domainValidationMiddleware())
-	itdogGroup.Use(rateLimitMiddleware(apiLimiter))
-	itdogGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 30*time.Second))
-	itdogGroup.GET("/:domain", handlers.ITDogHandler)
-
-	// ITDog Base64截图路由
-	itdogBase64Group := apiv1.Group("/itdog/base64")
-	itdogBase64Group.Use(domainValidationMiddleware())
-	itdogBase64Group.Use(rateLimitMiddleware(apiLimiter))
-	itdogBase64Group.GET("/:domain", handlers.ITDogBase64Handler)
-
-	// ITDog表格截图路由
-	itdogTableGroup := apiv1.Group("/itdog/table")
-	itdogTableGroup.Use(domainValidationMiddleware())
-	itdogTableGroup.Use(rateLimitMiddleware(apiLimiter))
-	itdogTableGroup.GET("/:domain", handlers.ITDogTableHandler)
-
-	// ITDog IP统计截图路由
-	itdogIPGroup := apiv1.Group("/itdog/ip")
-	itdogIPGroup.Use(domainValidationMiddleware())
-	itdogIPGroup.Use(rateLimitMiddleware(apiLimiter))
-	itdogIPGroup.GET("/:domain", handlers.ITDogIPHandler)
-
-	// ITDog IP统计截图Base64路由
-	itdogIPBase64Group := apiv1.Group("/itdog/ip/base64")
-	itdogIPBase64Group.Use(domainValidationMiddleware())
-	itdogIPBase64Group.GET("/:domain", handlers.ITDogIPBase64Handler)
-
-	// ITDog表格截图Base64路由
-	itdogTableBase64Group := apiv1.Group("/itdog/table/base64")
-	itdogTableBase64Group.Use(domainValidationMiddleware())
-	itdogTableBase64Group.GET("/:domain", handlers.ITDogTableBase64Handler)
-
-	// ITDog全国解析截图路由
-	itdogResolveGroup := apiv1.Group("/itdog/resolve")
-	itdogResolveGroup.Use(domainValidationMiddleware())
-	itdogResolveGroup.GET("/:domain", handlers.ITDogResolveHandler)
-
-	// ITDog全国解析截图Base64路由
-	itdogResolveBase64Group := apiv1.Group("/itdog/resolve/base64")
-	itdogResolveBase64Group.Use(domainValidationMiddleware())
-	itdogResolveBase64Group.GET("/:domain", handlers.ITDogResolveBase64Handler)
-
+	// 🔧 P2-3修复：启用统一截图架构
+	// 注册重构后的截图服务路由，包含新的统一API和向后兼容的legacy路由
+	// 这将替换下面所有手动定义的截图路由，启用Chrome管理器、熔断器和并发控制
+	RegisterScreenshotRoutes(apiv1, serviceContainer)
 }

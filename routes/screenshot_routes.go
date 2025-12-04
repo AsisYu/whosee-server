@@ -15,16 +15,22 @@ import (
 )
 
 // RegisterScreenshotRoutes 注册截图服务路由
-func RegisterScreenshotRoutes(r *gin.Engine, serviceContainer *services.ServiceContainer) {
+// 🔧 P2-3修复：接受已配置认证的router group，确保截图路由继承安全中间件
+func RegisterScreenshotRoutes(apiv1 *gin.RouterGroup, serviceContainer *services.ServiceContainer) {
 	// 创建截图服务实例
 	chromeManager := services.GetGlobalChromeManager()
 	screenshotService := services.NewScreenshotService(chromeManager, serviceContainer.RedisClient, nil)
 	screenshotHandler := handlers.NewUnifiedScreenshotHandler(screenshotService, chromeManager)
 
-	apiv1 := r.Group("/api/v1")
+	// 🔧 P2-3关键修复：先应用中间件，再注册路由
+	// Gin的Use()只影响之后注册的路由，必须在创建group后立即应用中间件
 
 	// 新的统一截图API (推荐使用)
 	screenshotGroup := apiv1.Group("/screenshot")
+	// 应用中间件（必须在路由注册之前）
+	screenshotGroup.Use(domainValidationMiddleware())
+	screenshotGroup.Use(rateLimitMiddleware(serviceContainer.Limiter))
+	screenshotGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 120*time.Second))
 	{
 		// 统一截图接口 - 支持所有截图类型
 		screenshotGroup.POST("/", screenshotHandler.TakeScreenshot)
@@ -37,6 +43,10 @@ func RegisterScreenshotRoutes(r *gin.Engine, serviceContainer *services.ServiceC
 
 	// 兼容旧版API路由 (保持向后兼容)
 	compatGroup := apiv1.Group("/")
+	// 应用中间件（必须在路由注册之前）
+	compatGroup.Use(domainValidationMiddleware())
+	compatGroup.Use(rateLimitMiddleware(serviceContainer.Limiter))
+	compatGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 120*time.Second))
 	{
 		// 基础截图兼容路由
 		compatGroup.GET("screenshot/:domain", addRedisMiddleware(serviceContainer), handlers.ScreenshotHandler)
@@ -59,16 +69,6 @@ func RegisterScreenshotRoutes(r *gin.Engine, serviceContainer *services.ServiceC
 		compatGroup.GET("itdog/resolve/:domain", addRedisMiddleware(serviceContainer), handlers.ITDogResolveHandler)
 		compatGroup.GET("itdog/resolve/base64/:domain", addRedisMiddleware(serviceContainer), handlers.ITDogResolveBase64Handler)
 	}
-
-	// 添加中间件到所有截图路由
-	screenshotGroup.Use(domainValidationMiddleware())
-	screenshotGroup.Use(rateLimitMiddleware(serviceContainer.Limiter))
-	screenshotGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 120*time.Second))
-
-	// 为兼容路由也添加必要的中间件
-	compatGroup.Use(domainValidationMiddleware())
-	compatGroup.Use(rateLimitMiddleware(serviceContainer.Limiter))
-	compatGroup.Use(asyncWorkerMiddleware(serviceContainer.WorkerPool, 120*time.Second))
 }
 
 // addRedisMiddleware 添加Redis中间件

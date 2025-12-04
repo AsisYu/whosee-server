@@ -9,6 +9,7 @@ package middleware
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -26,6 +27,30 @@ type Claims struct {
 	jwt.StandardClaims
 	Nonce string `json:"nonce"`
 	IP    string `json:"ip"`
+}
+
+// normalizeIP 规范化IP地址，处理IPv4和IPv6映射
+// 用于JWT IP绑定验证，确保IP比较的准确性
+func normalizeIP(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	// 解析IP地址
+	parsed := net.ParseIP(trimmed)
+	if parsed == nil {
+		// 如果解析失败，返回原始值（可能包含端口或其他信息）
+		return trimmed
+	}
+
+	// 如果是IPv4或IPv4映射的IPv6，返回IPv4格式
+	if v4 := parsed.To4(); v4 != nil {
+		return v4.String()
+	}
+
+	// 返回IPv6格式
+	return parsed.String()
 }
 
 func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
@@ -70,6 +95,21 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 
 		// 验证claims
 		if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+			// 🔐 P2-1修复：验证JWT IP绑定
+			// Token必须从其声明的IP地址使用，防止跨网络令牌重用
+			requestIP := normalizeIP(c.ClientIP())
+			tokenIP := normalizeIP(claims.IP)
+
+			if requestIP == "" || tokenIP == "" || requestIP != tokenIP {
+				log.Printf("[Security] Token IP mismatch: token_ip=%s request_ip=%s nonce=%s",
+					claims.IP, c.ClientIP(), claims.Nonce)
+				c.AbortWithStatusJSON(401, gin.H{
+					"error": "Token IP mismatch",
+					"code":  "IP_BINDING_FAILED",
+				})
+				return
+			}
+
 			// 验证nonce是否已使用
 			nonceKey := fmt.Sprintf("nonce:%s", claims.Nonce)
 			if exists, _ := rdb.Exists(c, nonceKey).Result(); exists == 1 {
