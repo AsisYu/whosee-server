@@ -23,10 +23,10 @@
 ```mermaid
 flowchart TD
     A[客户端请求] --> B{请求类型}
-    
-    B -->|获取Token| C[/api/auth/token]
-    B -->|API调用| D[/api/v1/*]
-    
+
+    B -->|获取Token| C["POST /api/auth/token"]
+    B -->|API调用| D["GET /api/v1/*"]
+
     %% Token获取流程
     C --> E{IP白名单检查}
     E -->|通过| F[生成JWT Token]
