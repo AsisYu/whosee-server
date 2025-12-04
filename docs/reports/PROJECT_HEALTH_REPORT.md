@@ -516,27 +516,35 @@ func (s *ScreenshotService) TakeScreenshot(...) {
 
 ---
 
-## 修复优先级建议
+## 修复优先级建议与完成状态
 
-### P0 (立即修复)
-1. Dockerfile泄露密钥 → 安全漏洞
-2. IP白名单缓存绕过 → 安全漏洞
-3. Authorization header DoS → 稳定性
+### P0 (立即修复) - 已完成
+1. Dockerfile泄露密钥 → 安全漏洞 [已修复 - commit fb79991]
+2. IP白名单缓存绕过 → 安全漏洞 [已修复 - commit fb79991]
+3. Authorization header DoS → 稳定性 [已修复 - commit fb79991]
 
-### P1 (本周内)
-4. WhoisManager并发安全 → 数据一致性
-5. TestProvidersHealth持锁 → 性能/稳定性
-6. Channel管理缺陷 → 稳定性
+**详见**: P0_FIX_REVIEW.md, RUNTIME_TEST_REPORT.md
 
-### P2 (两周内)
-7. JWT IP绑定验证 → 安全加固
-8. Screenshot TTL控制 → DoS防护
-9. RegisterScreenshotRoutes调用 → 功能完整性
+### P1 (本周内) - 部分完成
+4. WhoisManager并发安全 → 数据一致性 [已修复 - commit c33da20]
+5. TestProvidersHealth持锁 → 性能/稳定性 [已修复 - commit c33da20]
+6. Channel管理缺陷 → 稳定性 [未修复 - 低优先级]
 
-### P3 (月度计划)
-10. utils/chrome.go并发 → 稳定性提升
-11. context.Background()替换 → 资源管理
-12. Security header修复 → 浏览器安全策略
+**详见**: P1_CONCURRENCY_TEST_REPORT.md
+
+### P2 (两周内) - 已完成
+7. JWT IP绑定验证 → 安全加固 [已修复 - commit 50bd2fb]
+8. Screenshot TTL控制 → DoS防护 [已修复 - commit 50bd2fb]
+9. RegisterScreenshotRoutes调用 → 功能完整性 [已修复 - commit 50bd2fb]
+
+**详见**: P2_SECURITY_FIX_REPORT.md
+
+### P3 (月度计划) - 未修复
+10. utils/chrome.go并发 → 稳定性提升 [待修复]
+11. context.Background()替换 → 资源管理 [待修复]
+12. Security header修复 → 浏览器安全策略 [待修复]
+
+**备注**: P3问题为低优先级增强，不影响核心功能和安全
 
 ---
 
@@ -554,13 +562,24 @@ func (s *ScreenshotService) TakeScreenshot(...) {
 
 ---
 
-## 下一步行动
+## 下一步行动（更新：2025-12-04）
 
-1. ✅ 创建GitHub Issues追踪各个问题
-2. ✅ 建立修复分支
-3. ✅ 优先修复P0安全问题
-4. ✅ 添加并发测试（`go test -race`）
-5. ✅ 设置CI/CD集成安全扫描（gosec, govulncheck）
+### 已完成
+- [x] P0安全问题修复（3/3）
+- [x] P0修复运行时测试
+- [x] P1并发安全修复（2/3）
+- [x] P1修复并发测试验证
+- [x] P2安全与功能修复（3/3）
+- [x] 项目文件结构整理
 
-**预计修复周期**: 2-3周
-**重新检测日期**: 修复完成后进行验证
+### 当前建议
+1. **预发环境验证**: 所有P0/P1/P2修复的集成测试
+2. **监控配置**: 配置关键安全和性能指标
+3. **生产部署**: 基于APPROVED状态进行部署
+4. **持续监控**: 部署后监控IP_BINDING_FAILED、Cache TTL、Screenshot性能等指标
+
+### 后续计划
+1. **P1-3修复** (可选): AsyncWorker channel管理问题
+2. **P3问题** (可选): Security header、utils/chrome.go并发等轻微问题
+3. **性能优化**: 基于监控数据进行针对性优化
+4. **架构文档**: 补充docs/architecture/中的设计文档
