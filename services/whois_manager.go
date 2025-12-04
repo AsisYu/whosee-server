@@ -7,7 +7,7 @@ package services
 
 import (
 	"context"
-	"dmainwhoseek/types"
+	"whosee/types"
 	"encoding/json"
 	"fmt"
 	"log"

@@ -7,8 +7,8 @@ package handlers
 
 import (
 	"context"
-	"dmainwhoseek/services"
-	"dmainwhoseek/utils"
+	"whosee/services"
+	"whosee/utils"
 	"log"
 	"time"
 

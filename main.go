@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"dmainwhoseek/middleware"
-	"dmainwhoseek/providers"
-	"dmainwhoseek/routes"
-	"dmainwhoseek/services"
-	"dmainwhoseek/utils"
+	"whosee/middleware"
+	"whosee/providers"
+	"whosee/routes"
+	"whosee/services"
+	"whosee/utils"
 	"fmt"
 	"io"
 	"log"

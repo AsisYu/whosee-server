@@ -6,7 +6,7 @@
 package middleware
 
 import (
-	"dmainwhoseek/utils"
+	"whosee/utils"
 	"log"
 
 	"github.com/gin-gonic/gin"

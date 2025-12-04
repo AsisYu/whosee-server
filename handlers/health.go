@@ -6,7 +6,7 @@
 package handlers
 
 import (
-	"dmainwhoseek/utils"
+	"whosee/utils"
 	"net/url"
 	"os"
 	"strings"

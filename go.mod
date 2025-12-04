@@ -1,4 +1,4 @@
-module dmainwhoseek
+module whosee
 
 go 1.24
 

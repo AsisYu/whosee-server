@@ -11,10 +11,10 @@ import (
 	"os"
 	"time"
 
-	"dmainwhoseek/handlers"
-	"dmainwhoseek/middleware"
-	"dmainwhoseek/services"
-	"dmainwhoseek/utils"
+	"whosee/handlers"
+	"whosee/middleware"
+	"whosee/services"
+	"whosee/utils"
 
 	"github.com/gin-gonic/gin"
 )

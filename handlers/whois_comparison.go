@@ -7,9 +7,9 @@ package handlers
 
 import (
 	"context"
-	"dmainwhoseek/providers"
-	"dmainwhoseek/types"
-	"dmainwhoseek/utils"
+	"whosee/providers"
+	"whosee/types"
+	"whosee/utils"
 	"fmt"
 	"log"
 	"sync"

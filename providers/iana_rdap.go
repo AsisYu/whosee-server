@@ -7,8 +7,8 @@ package providers
 
 import (
 	"context"
-	"dmainwhoseek/types"
-	"dmainwhoseek/utils"
+	"whosee/types"
+	"whosee/utils"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"

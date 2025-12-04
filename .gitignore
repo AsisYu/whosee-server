@@ -13,6 +13,8 @@ logs/
 # 配置文件
 .env
 .env.local
+.env.backup
+.env.*.backup
 
 # 临时文件
 *.tmp

@@ -59,22 +59,40 @@ Whosee.me 是一个高性能的域名信息查询和分析服务，提供快速�
 ├── services/                            # 核心业务逻辑和服务组件
 │   ├── screenshot_service.go            # 🆕 统一截图服务
 │   ├── chrome_manager.go                # 🆕 重构Chrome管理器
+│   ├── whois_manager.go                 # 🔧 P1并发安全修复
 │   └── ...                              # 其他服务组件
 ├── routes/                              # API路由定义
 │   └── screenshot_routes.go             # 🆕 截图服务路由
 ├── types/                               # 数据类型定义
 ├── utils/                               # 辅助函数和工具
-│   └── domain.go                        #  增强的安全工具
+│   └── domain.go                        # 增强的安全工具
+├── tests/                               # 🆕 测试脚本和工具
+│   ├── README.md                        # 测试文档索引
+│   ├── test_runtime.sh                  # 旧版运行时测试
+│   └── test_runtime_v2.sh               # 🔐 P0修复运行时测试（推荐）
 ├── docs/                                # 文档目录
-│   ├── BACKEND_AUTHENTICATION_FLOW.md  # 后端认证流程详细文档
-│   ├── AUTHENTICATION_EXAMPLES.md      # 认证示例集合文档
-│   ├── ALL_JSON.md                     # API响应格式文档
-│   └── SCREENSHOT_REFACTOR.md          # 🆕 截图服务重构指南
+│   ├── reports/                         # 🆕 项目报告
+│   │   ├── README.md                    # 报告索引
+│   │   ├── PROJECT_HEALTH_REPORT.md     # 项目健康检查报告
+│   │   ├── P0_FIX_REVIEW.md             # 🔐 P0安全修复审查
+│   │   └── RUNTIME_TEST_REPORT.md       # 🔐 运行时测试报告
+│   ├── architecture/                    # 🆕 架构文档
+│   │   └── README.md                    # 架构文档索引
+│   ├── BACKEND_AUTHENTICATION_FLOW.md   # 后端认证流程详细文档
+│   ├── AUTHENTICATION_EXAMPLES.md       # 认证示例集合文档
+│   ├── ALL_JSON.md                      # API响应格式文档
+│   └── SCREENSHOT_REFACTOR.md           # 🆕 截图服务重构指南
 ├── logs/                                # 日志文件
 ├── static/                              # 静态资源（截图等）
+├── CLAUDE.md                            # Claude Code开发指南
 ├── .env                                 # 环境变量配置
 └── main.go                              # 应用入口
 ```
+
+**图例说明**:
+- 🆕 新增功能或重构
+- 🔐 安全修复
+- 🔧 性能或并发优化
 
 ## 安装指南
 

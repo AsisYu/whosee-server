@@ -7,7 +7,7 @@ package handlers
 
 import (
 	"context"
-	"dmainwhoseek/services"
+	"whosee/services"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"dmainwhoseek/utils"
+	"whosee/utils"
 
 	"github.com/chromedp/chromedp"
 	"github.com/gin-gonic/gin"

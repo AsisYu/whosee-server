@@ -8,8 +8,8 @@ package routes
 import (
 	"time"
 
-	"dmainwhoseek/handlers"
-	"dmainwhoseek/services"
+	"whosee/handlers"
+	"whosee/services"
 
 	"github.com/gin-gonic/gin"
 )

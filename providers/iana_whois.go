@@ -6,8 +6,8 @@
 package providers
 
 import (
-	"dmainwhoseek/types"
-	"dmainwhoseek/utils"
+	"whosee/types"
+	"whosee/utils"
 	"fmt"
 	"log"
 	"net"

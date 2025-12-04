@@ -6,7 +6,7 @@
 package services
 
 import (
-	"dmainwhoseek/utils"
+	"whosee/utils"
 	"log"
 	"net/http"
 	"strings"

@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"time"
 
-	"dmainwhoseek/services"
-	"dmainwhoseek/utils"
+	"whosee/services"
+	"whosee/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
