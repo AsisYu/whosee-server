@@ -1,10 +1,17 @@
 # Whosee.me 域名信息查询服务
 
+![Docker Image Version](https://img.shields.io/docker/v/hansomeyu/whosee-server?sort=semver&logo=docker&label=Docker%20Image)
+![Docker Image Size](https://img.shields.io/docker/image-size/hansomeyu/whosee-server/latest?logo=docker&label=Image%20Size)
+![Docker Pulls](https://img.shields.io/docker/pulls/hansomeyu/whosee-server?logo=docker&label=Pulls)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/AsisYu/whosee-server/docker-publish.yml?logo=github&label=Docker%20Build)
+![Go Version](https://img.shields.io/github/go-mod/go-version/AsisYu/whosee-server?logo=go)
+
 ## 项目概述
 
 Whosee.me 是一个高性能的域名信息查询和分析服务，提供快速、可靠的域名WHOIS信息查询、DNS记录查询、网站截图和性能测试功能。该服务集成了多个数据提供商API，实现了负载均衡、故障转移和智能缓存，并采用高并发优化架构，确保查询服务的高可用性和响应速度。
 
-前端仓库地址：[https://github.com/AsisYu/whosee-whois](https://github.com/AsisYu/whosee-whois)
+- 前端仓库：[https://github.com/AsisYu/whosee-whois](https://github.com/AsisYu/whosee-whois)
+- Docker镜像：[hansomeyu/whosee-server](https://hub.docker.com/r/hansomeyu/whosee-server)
 
 ## 主要特性
 
@@ -128,18 +135,88 @@ go run main.go
 
 ## 部署指南
 
-### 使用Docker部署
+### 使用Docker部署（推荐）
 
-1. 构建Docker镜像
+#### 快速开始
+
+使用预构建的Docker Hub镜像：
 
 ```bash
-# 在服务端目录下
-docker build -t whosee-server .
+# 拉取最新镜像
+docker pull hansomeyu/whosee-server:latest
+
+# 运行容器
+docker run -d -p 3900:3900 --name whosee-server \
+  -e WHOISFREAKS_API_KEY=your_api_key \
+  -e WHOISXML_API_KEY=your_api_key \
+  -e JWT_SECRET=your_jwt_secret \
+  -e API_KEY=your_api_key \
+  -e REDIS_ADDR=redis:6379 \
+  --restart unless-stopped \
+  hansomeyu/whosee-server:latest
 ```
 
-2. 运行容器
+#### 使用docker-compose（推荐生产环境）
+
+创建 `docker-compose.yml`：
+
+```yaml
+version: '3.8'
+
+services:
+  whosee-server:
+    image: hansomeyu/whosee-server:latest
+    container_name: whosee-server
+    ports:
+      - "3900:3900"
+    environment:
+      - JWT_SECRET=${JWT_SECRET}
+      - API_KEY=${API_KEY}
+      - WHOISFREAKS_API_KEY=${WHOISFREAKS_API_KEY}
+      - WHOISXML_API_KEY=${WHOISXML_API_KEY}
+      - REDIS_ADDR=redis:6379
+      - CHROME_MODE=auto
+      - GIN_MODE=release
+    depends_on:
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3900/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    container_name: whosee-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
+```
+
+启动服务：
 
 ```bash
+docker-compose up -d
+```
+
+#### 从源码构建（可选）
+
+如果需要自定义构建：
+
+```bash
+# 克隆仓库
+git clone https://github.com/AsisYu/whosee-server.git
+cd whosee-server
+
+# 构建镜像
+docker build -t whosee-server .
+
+# 运行容器
 docker run -d -p 3900:3900 --name whosee-server \
   -e WHOISFREAKS_API_KEY=your_api_key \
   -e WHOISXML_API_KEY=your_api_key \
@@ -148,6 +225,20 @@ docker run -d -p 3900:3900 --name whosee-server \
   --restart unless-stopped \
   whosee-server
 ```
+
+#### 多平台支持
+
+Docker镜像支持以下平台：
+- `linux/amd64` (x86_64)
+- `linux/arm64` (ARM64/Apple Silicon)
+
+指定平台拉取：
+```bash
+docker pull --platform linux/amd64 hansomeyu/whosee-server:latest
+docker pull --platform linux/arm64 hansomeyu/whosee-server:latest
+```
+
+详细配置请参考：[Docker自动构建与发布指南](docs/DOCKER_PUBLISH_GUIDE.md)
 
 ### 使用PM2部署（生产环境）
 
