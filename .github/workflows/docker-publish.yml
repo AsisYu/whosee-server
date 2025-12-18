@@ -9,13 +9,61 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:  # 允许手动触发构建
 
 env:
   REGISTRY: docker.io
   IMAGE_NAME: hansomeyu/whosee-server
 
 jobs:
+  # 快速测试job - 每次都运行
+  unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+  # 检测Docker相关文件是否变更
+  detect-docker-impact:
+    runs-on: ubuntu-latest
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整历史以准确判断变更
+
+      - name: Check file changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            docker:
+              # 核心文件
+              - Dockerfile
+              - '**/*.go'
+              - go.mod
+              - go.sum
+              # 部署配置
+              - docker-compose*.yml
+              # Workflow本身（修改workflow逻辑时也应该测试）
+              - .github/workflows/docker-publish.yml
+
+  # Docker构建和推送 - 仅在影响镜像的文件变更时运行
   build-and-push:
+    needs: [unit-test, detect-docker-impact]
+    # 条件：tag推送、手动触发、或检测到Docker相关文件变更
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || needs.detect-docker-impact.outputs.docker == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -57,6 +105,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -73,4 +122,51 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
 
       - name: Image digest
-        run: echo ${{ steps.meta.outputs.digest }}
+        run: echo ${{ steps.build.outputs.digest }}
+
+# ==================================================================================
+# Workflow优化说明
+# ==================================================================================
+#
+# 此workflow实现了智能构建策略，避免在非核心文件变更时重复构建Docker镜像：
+#
+# 1. unit-test job (每次都运行)
+#    - 快速验证Go代码质量
+#    - PR和main分支都会执行
+#    - 用时：~1-2分钟
+#
+# 2. detect-docker-impact job (每次都运行)
+#    - 检测是否有影响Docker镜像的文件变更
+#    - 监控文件：
+#      * 核心：Dockerfile, *.go, go.mod, go.sum
+#      * 配置：docker-compose*.yml
+#      * Workflow：.github/workflows/docker-publish.yml
+#    - 忽略：docs/, k8s/, *.md, security workflow等
+#    - 用时：~10-20秒
+#
+# 3. build-and-push job (条件触发)
+#    - 仅在以下情况运行：
+#      a) tag推送（v*.*.* 格式）- 保证release镜像总是被构建
+#      b) 手动触发（workflow_dispatch）- 允许按需构建
+#      c) 检测到Docker相关文件变更 - 避免不必要的构建
+#    - 用时：~5-10分钟（多架构构建）
+#
+# 触发场景示例：
+# - 文档修改（如README.md）：✅ 运行测试  ❌ 跳过Docker构建
+# - K8s配置修改：✅ 运行测试  ❌ 跳过Docker构建
+# - Go代码修改：✅ 运行测试  ✅ Docker构建
+# - Workflow修改：✅ 运行测试  ✅ Docker构建（验证workflow逻辑）
+# - Tag推送：✅ 运行测试  ✅ Docker构建（总是构建release）
+# - 手动触发：✅ 运行测试  ✅ Docker构建（按需构建）
+#
+# 预计节省：
+# - 约50-70%的Docker构建次数
+# - 约40-60%的workflow运行时间
+# - 约30-50%的Docker Hub API配额使用
+#
+# 注意事项：
+# - 如果项目有runtime资源文件（如templates, static assets），需添加到过滤列表
+# - workflow_dispatch允许在GitHub Actions页面手动触发构建
+# - PR构建不会推送到Docker Hub，仅验证构建成功
+#
+# ==================================================================================
