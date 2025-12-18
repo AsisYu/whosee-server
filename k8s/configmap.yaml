@@ -4,7 +4,7 @@ metadata:
   name: whosee-server-config
 data:
   APP_VERSION: "1.1.0"
-  PORT: "3000"
+  PORT: "3900"  # 统一使用3900端口，与Dockerfile、文档、nginx配置保持一致
   GIN_MODE: "release"
   HEALTH_CHECK_INTERVAL_DAYS: "3"
   API_DEV_MODE: "false"

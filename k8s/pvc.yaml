@@ -1,8 +1,55 @@
+# ==================================================================================
+# 持久卷声明 (PersistentVolumeClaim) - 需要ReadWriteMany (RWX)访问模式
+# ==================================================================================
+#
+# ⚠️ 重要说明：这些PVC需要支持ReadWriteMany访问模式的StorageClass
+#
+# 为什么需要RWX？
+# - 应用设置了replicas: 2，多个Pod需要同时访问相同的存储
+# - screenshots和itdog目录需要被所有Pod共享（用户上传的文件需要所有实例可见）
+# - logs目录虽然可以分离，但统一管理更简单
+#
+# 常见云平台的RWX存储配置：
+#
+# 1. KubeSphere/本地集群：
+#    - 使用NFS Provisioner
+#    - storageClassName: nfs-client 或 nfs-storage
+#
+# 2. AWS EKS：
+#    - 使用EFS (Elastic File System)
+#    - 需要部署EFS CSI Driver
+#    - storageClassName: efs-sc
+#
+# 3. Azure AKS：
+#    - 使用Azure Files
+#    - storageClassName: azurefile 或 azurefile-premium
+#
+# 4. Google GKE：
+#    - 使用Filestore
+#    - storageClassName: filestore-storage
+#
+# 5. 阿里云ACK：
+#    - 使用NAS存储
+#    - storageClassName: alicloud-nas
+#
+# 如何配置：
+# 1. 检查集群可用的StorageClass: kubectl get storageclass
+# 2. 找到支持RWX的StorageClass
+# 3. 取消下面的storageClassName注释，并替换为实际的类名
+# 4. 如果集群没有RWX支持，需要：
+#    - 安装NFS Provisioner，或
+#    - 使用云平台的文件存储服务，或
+#    - 考虑架构调整（使用对象存储如S3/OSS替代文件存储）
+#
+# ==================================================================================
+
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: whosee-logs-pvc
 spec:
+  # ⚠️ 必须修改：替换为集群中支持RWX的StorageClass名称
+  storageClassName: REPLACE-WITH-YOUR-RWX-STORAGECLASS  # 示例：nfs-client, efs-sc, azurefile
   accessModes:
     - ReadWriteMany
   resources:
@@ -14,6 +61,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: whosee-screenshots-pvc
 spec:
+  # ⚠️ 必须修改：替换为集群中支持RWX的StorageClass名称
+  storageClassName: REPLACE-WITH-YOUR-RWX-STORAGECLASS  # 示例：nfs-client, efs-sc, azurefile
   accessModes:
     - ReadWriteMany
   resources:
@@ -25,6 +74,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: whosee-itdog-pvc
 spec:
+  # ⚠️ 必须修改：替换为集群中支持RWX的StorageClass名称
+  storageClassName: REPLACE-WITH-YOUR-RWX-STORAGECLASS  # 示例：nfs-client, efs-sc, azurefile
   accessModes:
     - ReadWriteMany
   resources:
