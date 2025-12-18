@@ -7,6 +7,7 @@ package middleware
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,7 +139,7 @@ func CORSWithConfig(config CORSConfig) gin.HandlerFunc {
 		c.Header("Access-Control-Allow-Methods", strings.Join(config.AllowMethods, ", "))
 		c.Header("Access-Control-Allow-Headers", strings.Join(config.AllowHeaders, ", "))
 		c.Header("Access-Control-Expose-Headers", strings.Join(config.ExposeHeaders, ", "))
-		c.Header("Access-Control-Max-Age", string(int(config.MaxAge.Seconds())))
+		c.Header("Access-Control-Max-Age", strconv.Itoa(int(config.MaxAge.Seconds())))
 
 		// 设置Credentials
 		if config.AllowCredentials {
