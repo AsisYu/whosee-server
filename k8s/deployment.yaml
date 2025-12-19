@@ -87,15 +87,15 @@ spec:
           httpGet:
             path: /api/health
             port: 3900
-          initialDelaySeconds: 60  # 增加到60秒，Chrome需要启动时间
+          initialDelaySeconds: 300  # 增加到 5 分钟
           periodSeconds: 30
           timeoutSeconds: 10
-          failureThreshold: 3
+          failureThreshold: 5
         readinessProbe:
           httpGet:
             path: /api/health
             port: 3900
-          initialDelaySeconds: 30  # 增加到30秒
+          initialDelaySeconds: 300  # 增加到 5 分钟
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
