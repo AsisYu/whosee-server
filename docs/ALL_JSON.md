@@ -43,13 +43,14 @@
 
 ## WHOIS查询 API
 
-**端点**: `/api/v1/whois` 或 `/api/v1/whois/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/whois` 或 `/api/v1/whois/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "available": false,
     "domain": "example.com",
@@ -120,13 +121,14 @@
 
 ## DNS查询 API
 
-**端点**: `/api/v1/dns` 或 `/api/v1/dns/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/dns` 或 `/api/v1/dns/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "records": {
@@ -178,13 +180,14 @@
 
 ### 普通截图
 
-**端点**: `/api/v1/screenshot` 或 `/api/v1/screenshot/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/screenshot` 或 `/api/v1/screenshot/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "imageUrl": "/static/screenshots/example.com_20250510173000.png",
@@ -221,13 +224,14 @@
 
 ### 普通截图
 
-**端点**: `/api/v1/itdog/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/itdog/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "imageUrl": "/static/itdog/example.com_20250510173000.png",
@@ -276,13 +280,14 @@
 
 ### 表格截图
 
-**端点**: `/api/v1/itdog/table/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/itdog/table/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "imageUrl": "/static/itdog/table/example.com_20250510173000.png",
@@ -298,13 +303,14 @@
 
 ### 表格Base64截图
 
-**端点**: `/api/v1/itdog/table/base64/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/itdog/table/base64/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "imageBase64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
@@ -320,13 +326,14 @@
 
 ### IP统计截图
 
-**端点**: `/api/v1/itdog/ip/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/itdog/ip/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "imageUrl": "/static/itdog/ip/example.com_20250510173000.png",
@@ -357,6 +364,7 @@
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "imageBase64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
@@ -380,13 +388,14 @@
 
 ### 全国解析截图
 
-**端点**: `/api/v1/itdog/resolve/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/itdog/resolve/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "imageUrl": "/static/itdog/resolve/example.com_20250510173000.png",
@@ -412,13 +421,14 @@
 
 ### 全国解析Base64截图
 
-**端点**: `/api/v1/itdog/resolve/base64/:domain`  
-**方法**: GET  
-**认证要求**: JWT令牌  
+**端点**: `/api/v1/itdog/resolve/base64/:domain`
+**方法**: GET
+**认证要求**: JWT令牌
 **返回格式**:
 
 ```json
 {
+  "success": true,
   "data": {
     "domain": "example.com",
     "imageBase64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
@@ -572,10 +582,14 @@
 
 ```json
 {
-  "error": "ERROR_CODE",
-  "message": "详细的错误描述信息",
-  "timestamp": "2025-05-10T17:30:00+08:00",
-  "path": "/api/v1/whois/invalid-domain"
+  "success": false,
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "详细的错误描述信息"
+  },
+  "meta": {
+    "timestamp": "2025-05-10T17:30:00+08:00"
+  }
 }
 ```
 
