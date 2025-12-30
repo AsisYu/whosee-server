@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"whosee/middleware"
+	"whosee/pkg/logger"
 	"whosee/providers"
 	"whosee/routes"
 	"whosee/services"
 	"whosee/utils"
 	"fmt"
 	"io"
-	"log"
+	stdlog "log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,11 +32,11 @@ var logFile *lumberjack.Logger
 // 自定义日志格式
 func setupLogger() {
 	// 设置日志格式，包含时间戳、文件信息和日志级别
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+	stdlog.SetFlags(stdlog.Ldate | stdlog.Ltime | stdlog.Lshortfile)
 
 	// 确保日志目录存在
 	if err := os.MkdirAll("logs", 0755); err != nil {
-		log.Printf("警告: 无法创建日志目录: %v", err)
+		stdlog.Printf("警告: 无法创建日志目录: %v", err)
 	}
 
 	// 创建主服务器日志切割器
@@ -50,7 +51,7 @@ func setupLogger() {
 
 	// 同时输出到控制台和文件
 	mw := io.MultiWriter(os.Stdout, logFile)
-	log.SetOutput(mw)
+	stdlog.SetOutput(mw)
 
 	// 设置Gin的默认日志输出
 	gin.DefaultWriter = mw
@@ -58,8 +59,8 @@ func setupLogger() {
 	// 初始化健康检查日志记录器
 	utils.InitHealthLogger()
 
-	log.Println("日志系统初始化完成，启用了日志切割功能")
-	log.Println("健康检查日志记录器已初始化")
+	stdlog.Println("日志系统初始化完成，启用了日志切割功能")
+	stdlog.Println("健康检查日志记录器已初始化")
 }
 
 // 辅助函数
@@ -130,7 +131,7 @@ func printReadyBanner(publicURL, listenPort string) {
 	env := deriveEnvironment()
 	p := strings.TrimPrefix(listenPort, ":")
 	line := strings.Repeat("=", 64)
-	log.Printf("\n%s\n服务已就绪 (Whosee Server)\n- 版本: %s\n- 环境: %s\n- 监听端口: %s\n- 对外URL: %s\n%s\n", line, version, env, p, publicURL, line)
+	stdlog.Printf("\n%s\n服务已就绪 (Whosee Server)\n- 版本: %s\n- 环境: %s\n- 监听端口: %s\n- 对外URL: %s\n%s\n", line, version, env, p, publicURL, line)
 }
 
 // 从环境变量中读取CORS配置
@@ -172,8 +173,8 @@ func getCorsConfig() cors.Config {
 	}
 
 	// 打印CORS配置信息，便于调试
-	log.Printf("CORS配置: 允许的源=%v", allowedOrigins)
-	log.Printf("CORS配置: 允许的方法=%v", allowedMethods)
+	stdlog.Printf("CORS配置: 允许的源=%v", allowedOrigins)
+	stdlog.Printf("CORS配置: 允许的方法=%v", allowedMethods)
 
 	// 创建并返回CORS配置
 	return cors.Config{
@@ -192,14 +193,14 @@ func ensureSecurityConfig() {
 	// 验证JWT_SECRET必须设置且非空
 	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
 	if secret == "" {
-		log.Fatal("JWT_SECRET environment variable must be set before starting the server")
+		stdlog.Fatal("JWT_SECRET environment variable must be set before starting the server")
 	}
 
 	// 生产环境强制使用Release模式，防止泄露调试信息
 	env := deriveEnvironment()
 	if strings.EqualFold(env, "production") {
 		if gin.Mode() != gin.ReleaseMode {
-			log.Println("生产环境检测到GIN_MODE!=release，强制切换到Release模式以避免泄露调试信息")
+			stdlog.Println("生产环境检测到GIN_MODE!=release，强制切换到Release模式以避免泄露调试信息")
 		}
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -209,29 +210,42 @@ func main() {
 	// 加载环境变量（.env文件可选，支持纯环境变量部署）
 	if err := godotenv.Load(); err != nil {
 		if os.IsNotExist(err) {
-			log.Println("未找到.env文件，将使用系统环境变量")
+			stdlog.Println("未找到.env文件，将使用系统环境变量")
 		} else {
-			log.Fatalf("加载.env文件失败: %v", err)
+			stdlog.Fatalf("加载.env文件失败: %v", err)
 		}
 	}
 
 	// 初始化日志系统
 	setupLogger()
 
+	// 初始化结构化日志系统（zap）
+	env := logger.DeriveEnvironment()
+	if err := logger.Init(env); err != nil {
+		stdlog.Fatalf("Failed to initialize logger: %v", err)
+	}
+	defer logger.Sync() // 确保退出前刷新日志缓冲
+
 	// 🔐 安全修复：验证安全配置（JWT_SECRET、GIN_MODE等）
 	ensureSecurityConfig()
 
-	log.Printf("启动服务器，版本：%s，环境：%s", os.Getenv("APP_VERSION"), deriveEnvironment())
+	// 使用结构化日志
+	log := logger.Module("Main")
+	log.Infow("Server starting",
+		"version", os.Getenv("APP_VERSION"),
+		"environment", deriveEnvironment(),
+		"go_version", runtime.Version(),
+	)
 
 	// 首先确保Chrome可用 - 在所有其他服务之前
-	log.Println("=== 开始Chrome预检查和下载 ===")
+	log.Infof("=== 开始Chrome预检查和下载 ===")
 	chromeDownloader := utils.NewChromeDownloader()
 	if chromeExecPath, err := chromeDownloader.EnsureChrome(); err != nil {
-		log.Printf("Chrome下载失败: %v，将继续使用系统Chrome", err)
+		log.Warnf("Chrome下载失败: %v，将继续使用系统Chrome", err)
 	} else {
-		log.Printf("Chrome已准备就绪: %s", chromeExecPath)
+		log.Infof("Chrome已准备就绪: %s", chromeExecPath)
 	}
-	log.Println("=== Chrome预检查完成 ===")
+	log.Infof("=== Chrome预检查完成 ===")
 
 	// 初始化Redis客户端
 	redisAddr := os.Getenv("REDIS_ADDR")
@@ -272,26 +286,26 @@ func main() {
 	serviceContainer.InitializeHealthChecker()
 
 	// 异步初始化Chrome工具（完全非阻塞）
-	log.Println("正在后台异步初始化Chrome工具...")
+	log.Infof("正在后台异步初始化Chrome工具...")
 	port := getPort("8080") // 获取端口，以便在Chrome初始化失败时使用
 	go func() {
 		time.Sleep(3 * time.Second) // 延迟3秒启动，避免与主服务启动冲突
 
-		log.Println("[CHROME] 开始后台初始化Chrome工具...")
+		log.Infof("[CHROME] 开始后台初始化Chrome工具...")
 		if err := utils.InitGlobalChromeUtil(); err != nil {
-			log.Printf("[CHROME] Chrome工具初始化失败: %v，截图功能不可用", err)
+			log.Infof("[CHROME] Chrome工具初始化失败: %v，截图功能不可用", err)
 			// 在所有启动检查结束后提示对外URL与监听端口
 			publicURL := buildPublicURL(port)
 			printReadyBanner(publicURL, port)
 			return
 		}
 
-		log.Println("[CHROME] Chrome工具初始化成功")
+		log.Infof("[CHROME] Chrome工具初始化成功")
 
 		// 启动Chrome健康检查
 		chromeUtil := utils.GetGlobalChromeUtil()
 		if chromeUtil != nil {
-			log.Println("[CHROME] Chrome工具已就绪，启动健康监控")
+			log.Infof("[CHROME] Chrome工具已就绪，启动健康监控")
 			chromeUtil.StartHealthMonitor()
 		}
 
@@ -302,6 +316,12 @@ func main() {
 
 	// 创建Gin引擎
 	r := gin.Default()
+
+	// 添加请求ID中间件（必须在最前面，用于全局追踪）
+	r.Use(middleware.RequestID())
+
+	// 添加结构化HTTP日志中间件（替代gin.Default()的默认日志）
+	r.Use(middleware.HTTPLogger())
 
 	// 添加静态文件服务
 	r.Static("/static/screenshots", "./static/screenshots")
@@ -337,18 +357,18 @@ func main() {
 		quit := make(chan os.Signal, 1)
 		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 		<-quit
-		log.Println("正在关闭服务器...")
+		log.Infof("正在关闭服务器...")
 
 		// 关闭服务容器
 		serviceContainer.Shutdown()
 
 		// 停止Chrome工具（如果已初始化）
 		if chromeUtil := utils.GetGlobalChromeUtil(); chromeUtil != nil {
-			log.Println("[CHROME] 正在停止Chrome工具...")
+			log.Infof("[CHROME] 正在停止Chrome工具...")
 			chromeUtil.Stop()
-			log.Println("[CHROME] Chrome工具已停止")
+			log.Infof("[CHROME] Chrome工具已停止")
 		} else {
-			log.Println("[CHROME] Chrome工具未初始化，无需停止")
+			log.Infof("[CHROME] Chrome工具未初始化，无需停止")
 		}
 
 		// 设置关闭超时上下文
@@ -356,15 +376,15 @@ func main() {
 		defer cancel()
 
 		if err := srv.Shutdown(ctx); err != nil {
-			log.Fatalf("服务器被强制关闭: %v", err)
+			stdlog.Fatalf("服务器被强制关闭: %v", err)
 		}
 
-		log.Println("服务器已安全关闭")
+		log.Infof("服务器已安全关闭")
 	}()
 
 	// 启动服务
-	log.Printf("服务器启动在端口%s，环境：%s", port, deriveEnvironment())
+	log.Infof("服务器启动在端口%s，环境：%s", port, deriveEnvironment())
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("服务器启动失败: %v", err)
+		stdlog.Fatalf("服务器启动失败: %v", err)
 	}
 }

@@ -39,3 +39,5 @@ vendor/
 *.test
 *.prof
  
+# 编译的二进制文件
+whosee-server

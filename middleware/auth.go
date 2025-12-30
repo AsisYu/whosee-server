@@ -8,7 +8,6 @@ package middleware
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v4"
+	"whosee/pkg/logger"
 )
 
 const (
@@ -85,10 +85,13 @@ func respondAuthError(c *gin.Context, status int, publicMsg, code, detail string
 
 func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 获取带request_id的logger
+		log := logger.WithRequest(c, "Auth")
+
 		// 获取Authorization头
 		authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 		if authHeader == "" {
-			log.Printf("[Auth] Missing auth header from IP: %s", c.ClientIP())
+			log.Warnf("Missing auth header")
 			respondAuthError(c, 401, "Missing authorization header", "MISSING_AUTH_HEADER", "")
 			return
 		}
@@ -96,7 +99,7 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 		// 🔐 安全修复：验证Bearer前缀和长度，防止DoS攻击
 		const bearerPrefix = "Bearer "
 		if len(authHeader) < len(bearerPrefix) || !strings.HasPrefix(authHeader, bearerPrefix) {
-			log.Printf("[Auth] Invalid auth header format from IP: %s", c.ClientIP())
+			log.Warnf("Invalid auth header format")
 			respondAuthError(c, 401, "Invalid authorization header format", "INVALID_AUTH_FORMAT", "")
 			return
 		}
@@ -104,7 +107,7 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 		// 安全提取token
 		tokenString := strings.TrimSpace(authHeader[len(bearerPrefix):])
 		if tokenString == "" {
-			log.Printf("[Auth] Empty token from IP: %s", c.ClientIP())
+			log.Warnf("Empty token")
 			respondAuthError(c, 401, "Empty token", "EMPTY_TOKEN", "")
 			return
 		}
@@ -118,7 +121,7 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 		})
 
 		if err != nil {
-			log.Printf("[Auth] Token parse failed: ip=%s err=%v", c.ClientIP(), err)
+			log.Errorf("Token parse failed: %v", err)
 			respondAuthError(c, 401, "Invalid token", "TOKEN_PARSE_FAILED", err.Error())
 			return
 		}
@@ -133,7 +136,8 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 			if requestIP == "" || tokenIP == "" || requestIP != tokenIP {
 				detail := fmt.Sprintf("token_ip=%s request_ip=%s (normalized: token=%s request=%s) nonce=%s",
 					claims.IP, c.ClientIP(), tokenIP, requestIP, claims.Nonce)
-				log.Printf("[Security] Token IP mismatch: %s", detail)
+				log.With("token_ip", tokenIP, "request_ip", requestIP, "nonce", claims.Nonce).
+					Warnf("Token IP mismatch: token bound to %s but used from %s", tokenIP, requestIP)
 				respondAuthError(c, 401, "Invalid token", "IP_BINDING_FAILED", detail)
 				return
 			}
@@ -143,19 +147,19 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 			nonceKey := fmt.Sprintf("nonce:%s", claims.Nonce)
 			nonceStored, err := rdb.SetNX(c, nonceKey, true, TokenExpiration).Result()
 			if err != nil {
-				log.Printf("[Security] Redis error recording nonce: nonce=%s ip=%s err=%v", claims.Nonce, c.ClientIP(), err)
+				log.Errorf("Redis error recording nonce: %v", err)
 				respondAuthError(c, 500, "Internal server error", "NONCE_CHECK_FAILED", fmt.Sprintf("Redis error: %v", err))
 				return
 			}
 			if !nonceStored {
-				log.Printf("[Security] Nonce replay detected: nonce=%s ip=%s", claims.Nonce, c.ClientIP())
+				log.With("nonce", claims.Nonce).Warnf("Nonce replay attack detected")
 				respondAuthError(c, 401, "Invalid token", "NONCE_REPLAY", fmt.Sprintf("nonce=%s already used", claims.Nonce))
 				return
 			}
 
 			c.Next()
 		} else {
-			log.Printf("[Auth] Invalid token claims: ip=%s", c.ClientIP())
+			log.Warnf("Invalid token claims")
 			respondAuthError(c, 401, "Invalid token", "INVALID_CLAIMS", "token claims validation failed")
 		}
 	}
@@ -164,6 +168,9 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 // 生成临时Token的处理函数
 func GenerateToken(rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 获取带request_id的logger
+		log := logger.WithRequest(c, "Auth")
+
 		// 规范化IP地址（关键修复：确保token中的IP与后续验证时使用的IP格式一致）
 		clientIP := normalizeIP(c.ClientIP())
 
@@ -171,12 +178,12 @@ func GenerateToken(rdb *redis.Client) gin.HandlerFunc {
 		key := fmt.Sprintf("token:ip:%s", clientIP)
 		count, err := rdb.Incr(c, key).Result()
 		if err != nil {
-			log.Printf("[Auth] Redis error incrementing token rate limiter: ip=%s err=%v", clientIP, err)
+			log.Errorf("Redis error incrementing token rate limiter: %v", err)
 			c.JSON(503, gin.H{"error": "Rate limiter unavailable", "code": "RATE_LIMITER_UNAVAILABLE"})
 			return
 		}
 		if err := rdb.Expire(c, key, time.Minute).Err(); err != nil {
-			log.Printf("[Auth] Redis error setting token rate limiter TTL: ip=%s err=%v", clientIP, err)
+			log.Errorf("Redis error setting token rate limiter TTL: %v", err)
 			c.JSON(503, gin.H{"error": "Rate limiter unavailable", "code": "RATE_LIMITER_UNAVAILABLE"})
 			return
 		}
