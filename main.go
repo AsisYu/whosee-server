@@ -186,6 +186,25 @@ func getCorsConfig() cors.Config {
 	}
 }
 
+// ensureSecurityConfig 强制执行关键运行时安全先决条件
+// 🔐 安全修复：在服务器启动前验证安全配置，防止带着不安全配置运行
+func ensureSecurityConfig() {
+	// 验证JWT_SECRET必须设置且非空
+	secret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if secret == "" {
+		log.Fatal("JWT_SECRET environment variable must be set before starting the server")
+	}
+
+	// 生产环境强制使用Release模式，防止泄露调试信息
+	env := deriveEnvironment()
+	if strings.EqualFold(env, "production") {
+		if gin.Mode() != gin.ReleaseMode {
+			log.Println("生产环境检测到GIN_MODE!=release，强制切换到Release模式以避免泄露调试信息")
+		}
+		gin.SetMode(gin.ReleaseMode)
+	}
+}
+
 func main() {
 	// 加载环境变量（.env文件可选，支持纯环境变量部署）
 	if err := godotenv.Load(); err != nil {
@@ -198,6 +217,10 @@ func main() {
 
 	// 初始化日志系统
 	setupLogger()
+
+	// 🔐 安全修复：验证安全配置（JWT_SECRET、GIN_MODE等）
+	ensureSecurityConfig()
+
 	log.Printf("启动服务器，版本：%s，环境：%s", os.Getenv("APP_VERSION"), deriveEnvironment())
 
 	// 首先确保Chrome可用 - 在所有其他服务之前

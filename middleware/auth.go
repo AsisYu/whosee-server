@@ -30,18 +30,32 @@ type Claims struct {
 }
 
 // normalizeIP 规范化IP地址，处理IPv4和IPv6映射
-// 用于JWT IP绑定验证，确保IP比较的准确性
+// 关键改进：统一所有localhost地址为127.0.0.1，解决::1和127.0.0.1不匹配问题
 func normalizeIP(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return ""
 	}
 
+	// 移除端口号（如果存在）
+	if host, _, err := net.SplitHostPort(trimmed); err == nil {
+		trimmed = host
+	}
+
+	// 移除IPv6地址的方括号
+	trimmed = strings.Trim(trimmed, "[]")
+
 	// 解析IP地址
 	parsed := net.ParseIP(trimmed)
 	if parsed == nil {
-		// 如果解析失败，返回原始值（可能包含端口或其他信息）
+		// 如果解析失败，返回原始值
 		return trimmed
+	}
+
+	// 统一所有loopback地址（::1, 127.0.0.1, ::ffff:127.0.0.1）为127.0.0.1
+	// 这解决了开发环境中IPv4/IPv6 localhost不匹配的问题
+	if parsed.IsLoopback() {
+		return "127.0.0.1"
 	}
 
 	// 如果是IPv4或IPv4映射的IPv6，返回IPv4格式
@@ -49,8 +63,24 @@ func normalizeIP(raw string) string {
 		return v4.String()
 	}
 
-	// 返回IPv6格式
+	// 返回规范化的IPv6格式
 	return parsed.String()
+}
+
+// respondAuthError 统一的认证错误响应
+// 开发模式：返回详细错误信息帮助调试
+// 生产模式：只返回安全的错误代码，防止信息泄露
+func respondAuthError(c *gin.Context, status int, publicMsg, code, detail string) {
+	payload := gin.H{"error": publicMsg}
+	if code != "" {
+		payload["code"] = code
+	}
+	// 开发模式下返回详细信息，帮助前端开发调试
+	if gin.Mode() != gin.ReleaseMode && detail != "" {
+		payload["detail"] = detail
+		payload["hint"] = "This detail is only shown in development mode"
+	}
+	c.AbortWithStatusJSON(status, payload)
 }
 
 func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
@@ -58,24 +88,24 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 		// 获取Authorization头
 		authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 		if authHeader == "" {
-			log.Printf("Missing auth header from IP: %s", c.ClientIP())
-			c.AbortWithStatusJSON(401, gin.H{"error": "Missing authorization header"})
+			log.Printf("[Auth] Missing auth header from IP: %s", c.ClientIP())
+			respondAuthError(c, 401, "Missing authorization header", "MISSING_AUTH_HEADER", "")
 			return
 		}
 
 		// 🔐 安全修复：验证Bearer前缀和长度，防止DoS攻击
 		const bearerPrefix = "Bearer "
 		if len(authHeader) < len(bearerPrefix) || !strings.HasPrefix(authHeader, bearerPrefix) {
-			log.Printf("Invalid auth header format from IP: %s", c.ClientIP())
-			c.AbortWithStatusJSON(401, gin.H{"error": "Invalid authorization header format"})
+			log.Printf("[Auth] Invalid auth header format from IP: %s", c.ClientIP())
+			respondAuthError(c, 401, "Invalid authorization header format", "INVALID_AUTH_FORMAT", "")
 			return
 		}
 
 		// 安全提取token
 		tokenString := strings.TrimSpace(authHeader[len(bearerPrefix):])
 		if tokenString == "" {
-			log.Printf("Empty token from IP: %s", c.ClientIP())
-			c.AbortWithStatusJSON(401, gin.H{"error": "Empty token"})
+			log.Printf("[Auth] Empty token from IP: %s", c.ClientIP())
+			respondAuthError(c, 401, "Empty token", "EMPTY_TOKEN", "")
 			return
 		}
 
@@ -88,8 +118,8 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 		})
 
 		if err != nil {
-			log.Printf("Token validation failed: %v", err)
-			c.AbortWithStatusJSON(401, gin.H{"error": "Invalid token"})
+			log.Printf("[Auth] Token parse failed: ip=%s err=%v", c.ClientIP(), err)
+			respondAuthError(c, 401, "Invalid token", "TOKEN_PARSE_FAILED", err.Error())
 			return
 		}
 
@@ -101,28 +131,32 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 			tokenIP := normalizeIP(claims.IP)
 
 			if requestIP == "" || tokenIP == "" || requestIP != tokenIP {
-				log.Printf("[Security] Token IP mismatch: token_ip=%s request_ip=%s nonce=%s",
-					claims.IP, c.ClientIP(), claims.Nonce)
-				c.AbortWithStatusJSON(401, gin.H{
-					"error": "Token IP mismatch",
-					"code":  "IP_BINDING_FAILED",
-				})
+				detail := fmt.Sprintf("token_ip=%s request_ip=%s (normalized: token=%s request=%s) nonce=%s",
+					claims.IP, c.ClientIP(), tokenIP, requestIP, claims.Nonce)
+				log.Printf("[Security] Token IP mismatch: %s", detail)
+				respondAuthError(c, 401, "Invalid token", "IP_BINDING_FAILED", detail)
 				return
 			}
 
-			// 验证nonce是否已使用
+			// 🔐 安全修复：使用SetNX原子操作防止nonce重放竞争条件
+			// SetNX是原子操作，只有第一个请求能成功设置nonce，后续请求会失败
 			nonceKey := fmt.Sprintf("nonce:%s", claims.Nonce)
-			if exists, _ := rdb.Exists(c, nonceKey).Result(); exists == 1 {
-				c.AbortWithStatusJSON(401, gin.H{"error": "Token already used"})
+			nonceStored, err := rdb.SetNX(c, nonceKey, true, TokenExpiration).Result()
+			if err != nil {
+				log.Printf("[Security] Redis error recording nonce: nonce=%s ip=%s err=%v", claims.Nonce, c.ClientIP(), err)
+				respondAuthError(c, 500, "Internal server error", "NONCE_CHECK_FAILED", fmt.Sprintf("Redis error: %v", err))
 				return
 			}
-
-			// 记录nonce
-			rdb.Set(c, nonceKey, true, TokenExpiration)
+			if !nonceStored {
+				log.Printf("[Security] Nonce replay detected: nonce=%s ip=%s", claims.Nonce, c.ClientIP())
+				respondAuthError(c, 401, "Invalid token", "NONCE_REPLAY", fmt.Sprintf("nonce=%s already used", claims.Nonce))
+				return
+			}
 
 			c.Next()
 		} else {
-			c.AbortWithStatusJSON(401, gin.H{"error": "Invalid token claims"})
+			log.Printf("[Auth] Invalid token claims: ip=%s", c.ClientIP())
+			respondAuthError(c, 401, "Invalid token", "INVALID_CLAIMS", "token claims validation failed")
 		}
 	}
 }
@@ -130,12 +164,22 @@ func AuthRequired(rdb *redis.Client) gin.HandlerFunc {
 // 生成临时Token的处理函数
 func GenerateToken(rdb *redis.Client) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		clientIP := c.ClientIP()
+		// 规范化IP地址（关键修复：确保token中的IP与后续验证时使用的IP格式一致）
+		clientIP := normalizeIP(c.ClientIP())
 
-		// 检查IP的token请求频率
+		// 🔐 安全修复：Rate limiter fail-closed - Redis错误时拒绝请求而非允许通过
 		key := fmt.Sprintf("token:ip:%s", clientIP)
-		count, _ := rdb.Incr(c, key).Result()
-		rdb.Expire(c, key, time.Minute)
+		count, err := rdb.Incr(c, key).Result()
+		if err != nil {
+			log.Printf("[Auth] Redis error incrementing token rate limiter: ip=%s err=%v", clientIP, err)
+			c.JSON(503, gin.H{"error": "Rate limiter unavailable", "code": "RATE_LIMITER_UNAVAILABLE"})
+			return
+		}
+		if err := rdb.Expire(c, key, time.Minute).Err(); err != nil {
+			log.Printf("[Auth] Redis error setting token rate limiter TTL: ip=%s err=%v", clientIP, err)
+			c.JSON(503, gin.H{"error": "Rate limiter unavailable", "code": "RATE_LIMITER_UNAVAILABLE"})
+			return
+		}
 
 		if count > 30 { // 每分钟最多30个token
 			c.JSON(429, gin.H{
@@ -153,7 +197,7 @@ func GenerateToken(rdb *redis.Client) gin.HandlerFunc {
 				Issuer:    "whois-api.os.tn",
 			},
 			Nonce: nonce,
-			IP:    clientIP,
+			IP:    clientIP,  // 使用规范化后的IP
 		}
 
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
